@@ -68,20 +68,32 @@ Handle responses:
 
 If `.dev/scope.json` does not exist, proceed to Step 0.1.
 
-**Step 0.1 — Prepare workspace:**
+**Step 0.1 — Clean worktree check:**
+```bash
+if [ -n "$(git status --porcelain)" ]; then
+  echo "WARNING: Working tree has uncommitted changes."
+  echo "These changes will be included in the feature branch and review diff."
+fi
+```
+Present the warning to the user if triggered: **"Uncommitted changes detected. Stash them first? (stash / continue / abort)"**
+- "stash" → `git stash push -m "sigil: pre-pipeline stash"`, proceed
+- "continue" → proceed with dirty tree (user accepts the risk)
+- "abort" → stop
+
+**Step 0.2 — Prepare workspace:**
 ```bash
 mkdir -p .dev
 # Add .dev/ to .gitignore if not already present
 grep -qxF '.dev/' .gitignore 2>/dev/null || echo '.dev/' >> .gitignore
 ```
 
-**Step 0.2 — Create feature branch:**
+**Step 0.3 — Create feature branch:**
 - Record the current branch BEFORE creating the new branch: `BASE_REF=$(git rev-parse --abbrev-ref HEAD)`
 - Convert `$ARGUMENTS` to kebab-case, truncate to 50 chars max
 - Run: `git checkout -b feat/<kebab-case-summary>`
 - If `git checkout -b` fails with "already exists": run `git checkout feat/<kebab-case-summary>` instead and continue. If it fails for any other reason (bad ref, detached HEAD, etc.): stop and show the error to the user.
 
-**Step 0.3 — Gather data (bash only):**
+**Step 0.4 — Gather data (bash only):**
 ```bash
 # repo_root
 pwd
@@ -104,11 +116,11 @@ HAS_CI=false
 [ -f .gitlab-ci.yml ] && HAS_CI=true
 ```
 
-**Step 0.4 — Estimate scope from `$ARGUMENTS` and repo structure:**
+**Step 0.5 — Estimate scope from `$ARGUMENTS` and repo structure:**
 - Review the arguments and directory structure to guess which files will be touched.
 - List `estimated_files` as best-guess paths (not guaranteed, just planning hints).
 
-**Step 0.5 — Assess risk:**
+**Step 0.6 — Assess risk:**
 
 | Condition | Risk |
 |---|---|
@@ -123,7 +135,7 @@ HAS_CI=false
 - `estimated_files` includes configuration files: `*.yml`, `*.yaml`, `*.toml`, `*.env*`, `Dockerfile`, `docker-compose.*`
 - `estimated_files` includes database-related paths: files containing `migration`, `migrate`, `schema`, `alembic`, `prisma`
 
-**Step 0.6 — Agent count table:**
+**Step 0.7 — Agent count table:**
 
 | Risk | Explorers | Design Model | Implementers | Observer |
 |---|---|---|---|---|
@@ -131,7 +143,7 @@ HAS_CI=false
 | medium | 2 | opus | 2 | yes (post-build) |
 | high | 3 | opus | 3 | yes (post-build) |
 
-**Step 0.7 — Write `.dev/scope.json`:**
+**Step 0.8 — Write `.dev/scope.json`:**
 ```json
 {
   "feature": "<from $ARGUMENTS>",
@@ -150,13 +162,13 @@ HAS_CI=false
 }
 ```
 
-**Step 0.8 — Post-check:**
+**Step 0.9 — Post-check:**
 ```bash
 jq '.risk, .feature, .agent_count, .started_at, .review_strategy' .dev/scope.json
 ```
 Must succeed and return non-null values. If it fails: fix the JSON and retry once. If retry fails: stop and show user.
 
-**Step 0.9 — Display scope summary.**
+**Step 0.10 — Display scope summary.**
 
 Review strategy defaults: low→simple, medium→adversarial, high→consensus.
 For risk=low: auto-set review_strategy to "simple" in scope.json (no prompt, no pause).
@@ -288,7 +300,7 @@ If check fails: fix and retry once. If retry fails: stop and show user.
 If `risk="high"`: automatically run Codex review before presenting to user:
 ```bash
 # SECURITY: never interpolate file content into shell strings — use stdin
-cat .dev/design.md | timeout 120 codex exec --ephemeral -C "$PWD" \
+cat .dev/design.md | codex exec --ephemeral -C "$PWD" \
   "Review this feature design (provided via stdin). Flag security risks, architectural weaknesses, and missing edge cases. Be concise." 2>&1
 ```
 - Filter style disagreements (different model aesthetics are noise — only flag bugs, security, performance)
@@ -296,13 +308,12 @@ cat .dev/design.md | timeout 120 codex exec --ephemeral -C "$PWD" \
 
 Codex error handling (apply after each `codex` invocation):
 1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
-2. Run the codex command with timeout: `timeout 120 codex ...`
+2. Run the codex command
 3. If exit=0: set `codex_status: "ok"`
 4. If exit≠0 + stderr contains "auth" or "token": log "Codex auth expired — run `codex auth`", set `codex_status: "auth_expired"`, proceed
-5. If exit=124 (timeout): log "Codex timed out (>120s)", set `codex_status: "timeout"`, proceed
-6. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
+5. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
 
-Valid `codex_status` values: `"ok"`, `"not_installed"`, `"auth_expired"`, `"timeout"`, `"error"`, `"skipped"`.
+Valid `codex_status` values: `"ok"`, `"not_installed"`, `"auth_expired"`, `"error"`, `"skipped"`.
 
 **Step 2.6 — PAUSE. Present design to user and wait for explicit approval.**
 
@@ -424,11 +435,10 @@ Read `review_strategy` from `.dev/scope.json`. If field is missing (old session)
   - Fallback: `codex review 2>&1` → fallback: `general-purpose` sonnet with inline review prompt
   - Codex error handling (apply after each `codex` invocation):
     1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
-    2. Run the codex command with timeout: `timeout 120 codex ...`
+    2. Run the codex command
     3. If exit=0: set `codex_status: "ok"`
     4. If exit≠0 + stderr contains "auth" or "token": log "Codex auth expired — run `codex auth`", set `codex_status: "auth_expired"`, proceed
-    5. If exit=124 (timeout): log "Codex timed out (>120s)", set `codex_status: "timeout"`, proceed
-    6. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
+    5. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
   - Write `.dev/review-verdict.md` using the **same format as Step 3.8e** (unified schema):
     ```
     ## Review Verdict: PASS | WARN | BLOCK
@@ -658,16 +668,15 @@ Substitute these variables:
      head -c 51200 .dev/review-diff.txt
      printf '\nReply ONLY: PASS, WARN, or BLOCK with one sentence reason.\n'
    } > "$TMPFILE"
-   cat "$TMPFILE" | timeout 120 codex exec --ephemeral --skip-git-repo-check "" 2>&1
+   cat "$TMPFILE" | codex exec --ephemeral --skip-git-repo-check "" 2>&1
    rm -f "$TMPFILE"
    ```
    - Codex error handling (apply after each `codex` invocation):
      1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
-     2. Run the codex command with timeout: `timeout 120 codex ...`
+     2. Run the codex command
      3. If exit=0: set `codex_status: "ok"`
      4. If exit≠0 + stderr contains "auth" or "token": log "Codex auth expired — run `codex auth`", set `codex_status: "auth_expired"`, proceed
-     5. If exit=124 (timeout): log "Codex timed out (>120s)", set `codex_status: "timeout"`, proceed
-     6. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
+     5. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
    - Parse Codex response (extract PASS/WARN/BLOCK)
    - Codex unavailable (any non-ok codex_status) → final = BLOCK (conservative fallback)
    - Record tiebreaker artifact: `{input, output, verdict}` in `review-summary.json` under `codex_tiebreaker`
@@ -689,6 +698,7 @@ Substitute these variables:
   "round_2": null,
   "escalation_reason": "gap_2|null",
   "codex_invoked": false,
+  "codex_status": "ok|not_installed|auth_expired|error|skipped",
   "codex_tiebreaker": null,
   "final_verdict": "PASS|WARN|BLOCK|SKIPPED|ABORTED|UNRELIABLE",
   "findings_total": 0,
