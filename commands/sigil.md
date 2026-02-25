@@ -95,8 +95,8 @@ find . -not \( -path './.git/*' -o -path './node_modules/*' -o -path './__pycach
 
 # has_tests: set to true if test directory or test files found, false otherwise
 HAS_TESTS=false
-[ -n "$(find . -not -path './.git/*' -type d \( -name 'tests' -o -name 'test' \) 2>/dev/null | head -1)" ] && HAS_TESTS=true
-[ -n "$(find . -not -path './.git/*' -type f \( -name '*_test.*' -o -name '*.test.*' \) 2>/dev/null | head -1)" ] && HAS_TESTS=true
+[ -n "$(find . -not \( -path './.git/*' -o -path './node_modules/*' -o -path './.venv/*' -o -path './__pycache__/*' \) -type d \( -name 'tests' -o -name 'test' \) 2>/dev/null | head -1)" ] && HAS_TESTS=true
+[ -n "$(find . -not \( -path './.git/*' -o -path './node_modules/*' -o -path './.venv/*' -o -path './__pycache__/*' \) -type f \( -name '*_test.*' -o -name '*.test.*' \) 2>/dev/null | head -1)" ] && HAS_TESTS=true
 
 # has_ci: set to true if CI config found, false otherwise
 HAS_CI=false
@@ -287,7 +287,9 @@ If check fails: fix and retry once. If retry fails: stop and show user.
 
 If `risk="high"`: automatically run Codex review before presenting to user:
 ```bash
-codex exec --ephemeral -C "$PWD" "Review this feature design. Flag security risks, architectural weaknesses, and missing edge cases. Be concise. Design: $(cat .dev/design.md)" 2>&1
+# SECURITY: never interpolate file content into shell strings — use stdin
+cat .dev/design.md | timeout 120 codex exec --ephemeral -C "$PWD" \
+  "Review this feature design (provided via stdin). Flag security risks, architectural weaknesses, and missing edge cases. Be concise." 2>&1
 ```
 - Filter style disagreements (different model aesthetics are noise — only flag bugs, security, performance)
 - Present Codex findings alongside the design under a `### Codex Perspective` section
@@ -416,9 +418,10 @@ Read `review_strategy` from `.dev/scope.json`. If field is missing (old session)
 
 **CASE review_strategy:**
 
-- `"simple"` → launch 1 code reviewer (existing behavior):
-  - `subagent_type="feature-dev:code-reviewer"`, `model="sonnet"`, `run_in_background=false`
-  - Fallback: `codex review 2>&1` → fallback: `general-purpose` sonnet with review prompt
+- `"simple"` → launch 1 code reviewer:
+  - `subagent_type="general-purpose"`, `model="sonnet"`, `run_in_background=false`
+  - Prompt: use the REVIEWER_PROMPT from `lib/prompts/reviewer.md` with `{diff}`, `{design_md}`, `{scope_json}` substituted (same prompt as adversarial path). Instruct agent to write output to `.dev/reviewer-round-1.json`.
+  - Fallback: `codex review 2>&1` → fallback: `general-purpose` sonnet with inline review prompt
   - Codex error handling (apply after each `codex` invocation):
     1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
     2. Run the codex command with timeout: `timeout 120 codex ...`
@@ -459,7 +462,7 @@ Read `review_strategy` from `.dev/scope.json`. If field is missing (old session)
 
 1. **Capture diff + size gate:**
 ```bash
-git diff $BASE_REF..HEAD > .dev/review-diff.txt
+git diff "$BASE_REF"..HEAD > .dev/review-diff.txt
 DIFF_SHA=$(shasum -a 256 .dev/review-diff.txt | cut -d' ' -f1)
 DIFF_SIZE=$(wc -c < .dev/review-diff.txt)
 ```
@@ -589,10 +592,11 @@ Agent B (Skeptic):
 - `consensus` only — first check UNRELIABLE, then compute gap:
   1. Both UNRELIABLE → already handled in Step 3.8b (never reaches here)
   2. One UNRELIABLE → use other agent's verdict as final, skip gap calculation → Step 3.8e
-  3. Both reliable → compute gap:
+  3. Both reliable → compute gap using **recomputed** verdicts from Step 3.8b item 4 (NOT raw agent-reported verdicts):
      ```
-     gap = |level(reviewer_verdict) - level(skeptic_verdict)|
+     gap = |level(recomputed_reviewer_verdict) - level(recomputed_skeptic_verdict)|
      where PASS=0, WARN=1, BLOCK=2
+     recomputed_X_verdict = verdict derived from X's validated findings in Step 3.8b item 4
      ```
      - gap 0 → Step 3.8e (consensus reached)
      - gap 1 → strictest wins → Step 3.8e
@@ -622,22 +626,36 @@ Substitute these variables:
 
 5. **Wait** (same 5-minute timeout), **parse** (same 5-step JSON recovery chain including agent retry).
 
-6. **Validate `added[]` findings** using the same validation pipeline as Step 3.8b (file exists, line range, evidence grep, scope check).
+6. **Handle Round 2 UNRELIABLE agents:**
+   - Both Round 2 agents UNRELIABLE → skip refutals and additions entirely; recompute verdict from unmodified Round 1 findings; log `"unreliable_round2_agents": ["reviewer", "skeptic"]` in review-summary.json. Proceed to item 8.
+   - One Round 2 agent UNRELIABLE → exclude its `refuted[]` and `added[]` from the merge; use only the reliable agent's output. Log `"unreliable_round2_agents": ["<agent>"]`.
+   - Both reliable → proceed to item 7.
 
-7. **Merge Round 2 into Round 1:**
-   - Findings NOT in `refuted[]` → implicitly CONFIRMED (keep unchanged)
-   - Findings in `refuted[]` → REMOVE from set, log `{index, rationale}` in `review-summary.json` under `refuted_findings[]`
-   - `added[]` findings → validated, then appended to set
+7. **Validate `added[]` findings** using the same validation pipeline as Step 3.8b (file exists, line range, evidence grep, scope check).
 
-8. **Recompute verdict** from merged finding set (same rules as Step 3.8b item 4: from validated findings, not agent verdicts).
+8. **Merge Round 2 into Round 1:**
+   - A finding is refuted only if **BOTH** Round 2 agents list it in `refuted[]` with a rationale. If only one agent refutes, log it as `disputed_refutals[]` in `review-summary.json` (informational) but **keep the finding**.
+   - Findings NOT in the agreed `refuted[]` → implicitly CONFIRMED (keep unchanged)
+   - Agreed refuted findings → REMOVE from set, log `{index, rationale_reviewer, rationale_skeptic}` in `review-summary.json` under `refuted_findings[]`
+   - `added[]` findings (from reliable agents only) → validated, then appended to set
 
-9. **If recomputed verdict is still BLOCK and Round 1 had gap 2: Codex tiebreaker**
-   `{verdict_A}` = Round 1 reviewer verdict, `{verdict_B}` = Round 1 skeptic verdict (original, pre-merge values).
+9. **Recompute verdict** from merged finding set (same rules as Step 3.8b item 4: from validated findings, not agent verdicts).
+
+10. **If recomputed verdict is still BLOCK and Round 1 had gap 2: Codex tiebreaker**
+   `{verdict_A}` = Round 1 **recomputed** reviewer verdict, `{verdict_B}` = Round 1 **recomputed** skeptic verdict (from Step 3.8b item 4, NOT raw agent self-reports).
+   Prepare tiebreaker input:
    ```bash
-   codex exec --ephemeral --skip-git-repo-check \
-     "Tiebreak review. Reviewer: {verdict_A}. Skeptic: {verdict_B}.
-      Findings: {merged_json}. Diff (truncated to 50KB): {diff_first_50kb}.
-      Reply ONLY: PASS, WARN, or BLOCK with one sentence reason."
+   # SECURITY: never interpolate file/agent content into shell strings — use tempfile
+   DIFF_FIRST_50KB=$(head -c 51200 .dev/review-diff.txt)
+   cat > /tmp/sigil-tiebreaker-$$.txt <<TIEBREAK_EOF
+   Tiebreak review. Reviewer: ${verdict_A}. Skeptic: ${verdict_B}.
+   Findings: ${merged_json}.
+   Diff (truncated to 50KB):
+   ${DIFF_FIRST_50KB}
+   Reply ONLY: PASS, WARN, or BLOCK with one sentence reason.
+   TIEBREAK_EOF
+   cat /tmp/sigil-tiebreaker-$$.txt | timeout 120 codex exec --ephemeral --skip-git-repo-check "" 2>&1
+   rm -f /tmp/sigil-tiebreaker-$$.txt
    ```
    - Codex error handling (apply after each `codex` invocation):
      1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
@@ -649,8 +667,9 @@ Substitute these variables:
    - Parse Codex response (extract PASS/WARN/BLOCK)
    - Codex unavailable (any non-ok codex_status) → final = BLOCK (conservative fallback)
    - Record tiebreaker artifact: `{input, output, verdict}` in `review-summary.json` under `codex_tiebreaker`
+   - Set `codex_invoked: true` in `review-summary.json`
 
-10. **Write `.dev/review-round-2-validated.json`**
+11. **Write `.dev/review-round-2-validated.json`**
 
 **Step 3.8e — Final Output:**
 
@@ -658,7 +677,7 @@ Substitute these variables:
 ```json
 {
   "strategy": "simple|adversarial|consensus",
-  "rounds": 1,
+  "rounds": 1,  // set to 2 when Step 3.8d (Round 2) was executed
   "round_1": {
     "reviewer": {"verdict": "PASS|WARN|BLOCK|UNRELIABLE", "findings_count": 0, "invalid_count": 0},
     "skeptic":  {"verdict": "PASS|WARN|BLOCK|UNRELIABLE", "findings_count": 0, "invalid_count": 0}
@@ -753,6 +772,7 @@ BLOCK is the only verdict that hard-fails. STOP is handled interactively in Step
 **Step 3.10 — Archive run artifacts:**
 ```bash
 STARTED_AT=$(jq -r '.started_at' .dev/scope.json | tr ':' '-' | tr 'T' '_' | tr -d 'Z')
+[ -z "$STARTED_AT" ] || [ "$STARTED_AT" = "null" ] && STARTED_AT="unknown"
 mkdir -p ".dev/runs/$STARTED_AT"
 cp .dev/scope.json .dev/exploration.md .dev/design.md ".dev/runs/$STARTED_AT/" 2>/dev/null
 [ -f .dev/observer-report.md ] && cp .dev/observer-report.md ".dev/runs/$STARTED_AT/"

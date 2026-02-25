@@ -94,7 +94,7 @@ Return EXACTLY this structure:
 **Plan:** <plan file name>
 **Scope:** <steps observed>
 **Base:** <BASE_REF>
-**Verdict:** PASS | BLOCK | STOP
+**Verdict:** PASS | WARN | BLOCK | STOP
 
 ### Findings
 
@@ -107,7 +107,7 @@ Return EXACTLY this structure:
 ```
 
 Rules:
-- Verdict = highest severity found. Precedence: STOP > BLOCK > WARN > PASS.
+- Verdict = highest severity found. Precedence: BLOCK > STOP > WARN > PASS.
 - Every finding MUST have an Evidence cell citing a file path, line number, git output, or plan step ID.
 - If no issues found: Verdict = PASS, table contains single row: `| - | - | - | - | No findings detected | - |`
 

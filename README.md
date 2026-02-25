@@ -19,7 +19,24 @@ Risk-adaptive development pipeline with adversarial consensus code review for [C
 | adversarial | medium risk | Reviewer + Skeptic (blind parallel) | 1 | no |
 | consensus | high risk | Reviewer + Skeptic | 1-2 + tiebreaker | yes |
 
+## Prerequisites
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v2.1.47+
+- `git` (initialized repo)
+- `jq` (used for scope parsing and post-checks)
+- Optional: [Codex CLI](https://github.com/openai/codex) for design review and tiebreaker
+
 ## Install
+
+```bash
+# Clone the plugin
+git clone https://github.com/Real-AI-Engineering/sigil.git ~/.claude/plugins/sigil
+
+# Enable it in Claude Code settings (~/.claude/settings.json)
+# Add to "enabledPlugins": { "sigil@local": true }
+```
+
+Or if `claude plugin install` is available in your Claude Code version:
 
 ```bash
 claude plugin install Real-AI-Engineering/sigil
@@ -87,7 +104,7 @@ Costs are approximate and depend on diff size and codebase complexity.
 Sigil optionally uses [Codex CLI](https://github.com/openai/codex) for:
 - **Design review** (high risk) — independent second opinion on architecture
 - **Tiebreaker** (consensus) — breaks deadlock between Reviewer and Skeptic
-- **Fallback reviewer** (simple) — when feature-dev:code-reviewer is unavailable
+- **Fallback reviewer** (simple) — when primary reviewer agent is unavailable
 
 If Codex is not installed, Sigil degrades gracefully — all Codex steps are skipped with a logged reason. The `codex_status` field in `.dev/review-summary.json` tracks what happened: `ok`, `not_installed`, `auth_expired`, `timeout`, `error`, or `skipped`.
 
@@ -101,6 +118,21 @@ If you interrupt a `/sigil` session, the pipeline detects existing `.dev/` artif
 - **abort** — stop
 
 Run history is archived to `.dev/runs/<timestamp>/` after each completed build.
+
+## Security Notes
+
+- `.dev/` artifacts (including `review-diff.txt`) contain your full git diff. They are gitignored by default — do not commit or share them.
+- Review agents analyze code content via LLM prompts. When reviewing untrusted codebases, be aware that malicious code could attempt prompt injection. The multi-agent architecture and evidence validation provide defense-in-depth but are not immune.
+- Codex integration sends design docs and diffs to an external service. Use `review=simple` or `review=adversarial` to avoid Codex calls, or uninstall Codex CLI.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `jq: command not found` | Install jq: `brew install jq` (macOS) or `apt install jq` (Linux) |
+| `codex: auth expired` | Run `codex auth` to refresh credentials |
+| `.dev/` exists from previous run | `/sigil` detects this and offers resume/restart/abort |
+| Plugin not loading | Verify symlink: `ls -la ~/.claude/plugins/sigil` and `enabledPlugins` in settings |
 
 ## Configuration (v2 Roadmap)
 
