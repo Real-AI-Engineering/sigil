@@ -121,7 +121,7 @@ Run history is archived to `.dev/runs/<timestamp>/` after each completed build.
 
 ## Security Notes
 
-- `.dev/` artifacts (including `review-diff.txt`) contain your full git diff. They are gitignored by default — do not commit or share them.
+- `.dev/` artifacts (including `review-diff.txt`) contain your full git diff. The pipeline adds `.dev/` to your project's `.gitignore` automatically (Step 0.1) — but verify this before committing.
 - Review agents analyze code content via LLM prompts. When reviewing untrusted codebases, be aware that malicious code could attempt prompt injection. The multi-agent architecture and evidence validation provide defense-in-depth but are not immune.
 - Codex integration sends design docs and diffs to an external service. Use `review=simple` or `review=adversarial` to avoid Codex calls, or uninstall Codex CLI.
 
