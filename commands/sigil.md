@@ -646,7 +646,12 @@ Substitute these variables:
    Prepare tiebreaker input:
    ```bash
    # SECURITY: never interpolate file/agent content into shell strings — use tempfile
+   # Assign variables from prior steps before building the prompt
+   verdict_A="<recomputed reviewer verdict from Step 3.8b item 4>"
+   verdict_B="<recomputed skeptic verdict from Step 3.8b item 4>"
+   merged_json=$(cat .dev/review-round-2-validated.json 2>/dev/null || cat .dev/review-round-1-validated.json)
    DIFF_FIRST_50KB=$(head -c 51200 .dev/review-diff.txt)
+
    cat > /tmp/sigil-tiebreaker-$$.txt <<TIEBREAK_EOF
    Tiebreak review. Reviewer: ${verdict_A}. Skeptic: ${verdict_B}.
    Findings: ${merged_json}.
@@ -657,6 +662,7 @@ Substitute these variables:
    cat /tmp/sigil-tiebreaker-$$.txt | timeout 120 codex exec --ephemeral --skip-git-repo-check "" 2>&1
    rm -f /tmp/sigil-tiebreaker-$$.txt
    ```
+   The orchestrator MUST substitute `verdict_A` and `verdict_B` with the actual recomputed verdicts (PASS/WARN/BLOCK strings) from Step 3.8b item 4 before running this block.
    - Codex error handling (apply after each `codex` invocation):
      1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
      2. Run the codex command with timeout: `timeout 120 codex ...`
