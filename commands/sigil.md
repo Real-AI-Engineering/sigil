@@ -808,14 +808,14 @@ printf '%s' "$GEMINI_RESULT" > .dev/gemini-round-1.json
    ```bash
    # Codex tiebreaker (only if Codex was NOT the original source)
    OUT=$(mktemp); ERR=$(mktemp)
-   echo "$TIEBREAKER_PROMPT" | codex exec --ephemeral --skip-git-repo-check -C "$PWD" -p fast --output-last-message "$OUT" - 2>"$ERR"
+   printf '%s' "$TIEBREAKER_PROMPT" | codex exec --ephemeral --skip-git-repo-check -C "$PWD" -p fast --output-last-message "$OUT" - 2>"$ERR"
    CODEX_VOTE=$(cat "$OUT"); rm -f "$OUT" "$ERR"
    ```
 
    ```bash
    # Gemini tiebreaker (only if Gemini was NOT the original source)
    ERR=$(mktemp)
-   GEMINI_VOTE=$(echo "$TIEBREAKER_PROMPT" | gemini -p - -o text 2>"$ERR")
+   GEMINI_VOTE=$(printf '%s' "$TIEBREAKER_PROMPT" | gemini -p - -o text 2>"$ERR")
    GEMINI_TIEBREAK_EXIT=$?
    if [ $GEMINI_TIEBREAK_EXIT -ne 0 ]; then
      if grep -Eqi 'auth|login|403|401|credentials' "$ERR"; then
