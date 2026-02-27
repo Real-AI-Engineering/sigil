@@ -745,89 +745,95 @@ echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
 
 - `adversarial` → go to Step 3.8e (no Round 2, ever)
 
-- `consensus` only — first check UNRELIABLE, then compute gap:
-  1. Both UNRELIABLE → already handled in Step 3.8b (never reaches here)
-  2. One UNRELIABLE → use other agent's verdict as final, skip gap calculation → Step 3.8e
-  3. Both reliable → compute gap using **recomputed** verdicts from Step 3.8b item 4 (NOT raw agent-reported verdicts):
-     ```
-     gap = |level(recomputed_reviewer_verdict) - level(recomputed_skeptic_verdict)|
-     where PASS=0, WARN=1, BLOCK=2
-     recomputed_X_verdict = verdict derived from X's validated findings in Step 3.8b item 4
-     ```
-     - gap 0 → Step 3.8e (consensus reached)
-     - gap 1 → strictest wins → Step 3.8e
-     - gap 2 (PASS vs BLOCK) → Step 3.8d (Round 2)
+- `consensus` only — check for disputed single-provider criticals:
+  1. If ALL providers are UNRELIABLE/ABSTAIN → already handled in Step 3.8b
+  2. Count `disputed_criticals`: clusters with `severity=critical`, `verified=true`, `cross_provider=false` (found by only one provider)
+  3. If `disputed_criticals == 0` → consensus reached → Step 3.8e
+  4. If `disputed_criticals > 0` → Step 3.8d (Round 2 needed to confirm/refute single-provider criticals)
 
-**Step 3.8d — Round 2: Escalation (consensus only, triggered by gap=2):**
+**Step 3.8d — Round 2: Multi-Provider Confirmation (consensus only, triggered by disputed single-provider criticals):**
 
-1. **Verify diff integrity:** Re-compute `shasum -a 256 .dev/review-diff.txt` and compare against stored `DIFF_SHA`. If mismatch: warn "Diff changed between rounds — possible concurrent modification. Recompute? (yes / abort)". If user says yes, re-capture diff and update DIFF_SHA.
+1. **Verify diff integrity:** Re-compute `shasum -a 256 .dev/review-diff.txt` and compare against stored `DIFF_SHA`. If mismatch: warn and offer recompute.
 
-2. **Prepare Round 1 merged findings** as JSON context for agents.
+2. **Prepare Round 2 context:** Extract disputed clusters (single-provider criticals) as JSON.
 
-3. **ROUND_2_PROMPT** — injected from plugin prompts:
+3. **Round 2 prompt for Claude agents** — use existing `@${CLAUDE_PLUGIN_ROOT}/lib/prompts/round2.md` with `{round_1_merged_findings_json}` = disputed clusters only (not all findings).
 
-@${CLAUDE_PLUGIN_ROOT}/lib/prompts/round2.md
-
-Substitute these variables:
-- `{round_1_merged_findings_json}` → the merged+validated findings JSON from Step 3.8b
-- `{diff}` → contents of `.dev/review-diff.txt`
-
-4. **Launch parallel:** both agents with Round 2 prompt
+4. **Round 2 prompt for external providers:**
    ```
-   Reviewer: ROUND_2_PROMPT with {round_1_merged_findings_json, diff} substituted
-             output → .dev/reviewer-round-2.json
-   Skeptic:  ROUND_2_PROMPT with {round_1_merged_findings_json, diff} substituted
-             output → .dev/skeptic-round-2.json
+   You previously reviewed this diff. The following findings were flagged by only one reviewer and need confirmation.
+   For each finding, respond ONLY with valid JSON:
+   {"confirmations": [{"id": N, "confirm": true|false, "evidence": "exact code quote from the diff", "rationale": "one sentence"}]}
+   NOTE: evidence is REQUIRED. Responses without evidence are discarded.
+
+   Findings to review:
+   {disputed_clusters_json}
+
+   Diff:
+   {diff}
    ```
 
-5. **Wait** (same 5-minute timeout), **parse** (same 5-step JSON recovery chain including agent retry).
+5. **Launch ALL available providers in parallel:**
+   - Claude Reviewer + Skeptic: Round 2 prompt with `run_in_background=true`
+   - Codex (if status=ok in Round 1): external Round 2 prompt with `run_in_background=true`
+   - Gemini (if status=ok in Round 1): external Round 2 prompt with `run_in_background=true`
 
-6. **Handle Round 2 UNRELIABLE agents:**
-   - Both Round 2 agents UNRELIABLE → skip refutals and additions entirely; recompute verdict from unmodified Round 1 findings; log `"unreliable_round2_agents": ["reviewer", "skeptic"]` in review-summary.json. Proceed to item 8.
-   - One Round 2 agent UNRELIABLE → exclude its `refuted[]` and `added[]` from the merge. Since the BOTH-must-agree rule (item 8) cannot be satisfied with one agent, **no findings may be refuted**. Only `added[]` from the reliable agent are applied. Log `"unreliable_round2_agents": ["<agent>"]`.
-   - Both reliable → proceed to item 7.
+6. **Wait** (same timeouts as Round 1). Parse responses (same JSON recovery chains).
 
-7. **Validate `added[]` findings** using the same validation pipeline as Step 3.8b (file exists, line range, evidence grep, scope check).
+7. **Resolve disputed findings:**
+   - For each disputed cluster, count confirmations across all responding providers
+   - **Majority confirms** (>50% of responding providers) → finding stands, mark `confirmed_by: [list]`
+   - **Majority refutes** (>50%) → finding removed, log in `refuted_findings[]`
+   - **Tie** → finding stands (conservative)
 
-8. **Merge Round 2 into Round 1:**
-   - A finding is refuted only if **BOTH** Round 2 agents list it in `refuted[]` with a rationale. If only one agent refutes, log it as `disputed_refutals[]` in `review-summary.json` (informational) but **keep the finding**.
-   - Findings NOT in the agreed `refuted[]` → implicitly CONFIRMED (keep unchanged)
-   - Agreed refuted findings → REMOVE from set, log `{index, rationale_reviewer, rationale_skeptic}` in `review-summary.json` under `refuted_findings[]`
-   - `added[]` findings (from reliable agents only) → validated, then appended to set
+8. **Recompute verdict** from updated cluster set (same quorum rules as Step 3.8b item 4).
 
-9. **Recompute verdict** from merged finding set (same rules as Step 3.8b item 4: from validated findings, not agent verdicts).
+9. **If verdict still BLOCK after Round 2 — Panel Tiebreaker:**
 
-10. **If recomputed verdict is still BLOCK and Round 1 had gap 2: Codex tiebreaker**
-   `{verdict_A}` = Round 1 **recomputed** reviewer verdict, `{verdict_B}` = Round 1 **recomputed** skeptic verdict (from Step 3.8b item 4, NOT raw agent self-reports).
-   Prepare tiebreaker input — the orchestrator MUST substitute `verdict_A` and `verdict_B` with the actual recomputed verdicts (PASS/WARN/BLOCK strings) from Step 3.8b item 4 before running this block:
+   If the BLOCK is driven by a single-provider critical (even after Round 2 — finding was not refuted but also not cross-confirmed):
+
+   **Exclude the original source provider** from the panel — a provider cannot vote on its own finding.
+   Example: if Codex found the critical, panel = Claude + Gemini (not Codex).
+
+   Launch panel with remaining providers:
+
    ```bash
-   # SECURITY: build prompt via printf + cat (no heredoc expansion of untrusted content)
-   TMPFILE="/tmp/sigil-tiebreaker-$$.txt"
-   trap 'rm -f "$TMPFILE"' EXIT
-   (umask 077; touch "$TMPFILE")
-   {
-     printf 'Tiebreak review. Reviewer: %s. Skeptic: %s.\n' "$verdict_A" "$verdict_B"
-     printf 'Findings:\n'
-     cat .dev/review-round-2-validated.json 2>/dev/null || cat .dev/review-round-1-validated.json
-     printf '\nDiff (truncated to 50KB):\n'
-     head -c 51200 .dev/review-diff.txt
-     printf '\nReply ONLY: PASS, WARN, or BLOCK with one sentence reason.\n'
-   } > "$TMPFILE"
-   cat "$TMPFILE" | codex exec --ephemeral --skip-git-repo-check "" 2>&1
-   rm -f "$TMPFILE"
+   TIEBREAKER_PROMPT="Critical finding: $CLAIM at $FILE:$LINE. Evidence: $EVIDENCE. Diff excerpt: $(head -c 10240 .dev/review-diff.txt). Is this a real critical bug? Reply ONLY: YES or NO with one sentence reason."
    ```
-   - Codex error handling (apply after each `codex` invocation):
-     1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
-     2. Run the codex command
-     3. If exit=0: set `codex_status: "ok"`
-     4. If exit≠0 + stderr contains "auth" or "token": log "Codex auth expired — run `codex auth`", set `codex_status: "auth_expired"`, proceed
-     5. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
-   - Parse Codex response (extract PASS/WARN/BLOCK)
-   - Codex unavailable (any non-ok codex_status) → final = BLOCK (conservative fallback)
-   - Record tiebreaker artifact: `{input, output, verdict}` in `review-summary.json` under `codex_tiebreaker`
-   - Set `codex_invoked: true` in `review-summary.json`
 
-11. **Write `.dev/review-round-2-validated.json`**
+   ```bash
+   # Codex tiebreaker (only if Codex was NOT the original source)
+   OUT=$(mktemp); ERR=$(mktemp)
+   echo "$TIEBREAKER_PROMPT" | codex exec --ephemeral --skip-git-repo-check -C "$PWD" -p fast --output-last-message "$OUT" - 2>"$ERR"
+   CODEX_VOTE=$(cat "$OUT"); rm -f "$OUT" "$ERR"
+   ```
+
+   ```bash
+   # Gemini tiebreaker (only if Gemini was NOT the original source)
+   ERR=$(mktemp)
+   GEMINI_VOTE=$(echo "$TIEBREAKER_PROMPT" | gemini -p - -o text 2>"$ERR")
+   rm -f "$ERR"
+   ```
+
+   Claude orchestrator also forms own opinion → up to 3 votes (minus source provider, minus unavailable).
+   **Source exclusion rule:** Exclude by VENDOR, not agent. If the finding was from `claude_reviewer` or `claude_skeptic`, then Claude orchestrator is also excluded (same vendor = Anthropic). Panel would be Codex + Gemini only. If the finding was from Codex, Claude orchestrator CAN vote (different vendor).
+
+   - **Minimum panel size:** 2 voters (excluding source). If fewer than 2 available, skip tiebreaker — BLOCK stands with `[LOW_CONFIDENCE]` tag.
+   - Majority YES → BLOCK stands
+   - Majority NO → downgrade to WARN
+   - Tie → BLOCK stands (conservative)
+   - Provider unavailable → excluded from vote, reduced quorum
+
+   Record in `review-summary.json` under `panel_tiebreaker`:
+   ```json
+   {
+     "finding_id": N,
+     "votes": {"codex": "YES|NO|unavailable", "gemini": "YES|NO|unavailable", "claude": "YES|NO"},
+     "result": "BLOCK|WARN"
+   }
+   ```
+
+10. **Write `.dev/review-round-2-validated.json`**
 
 **Step 3.8e — Final Output:**
 
