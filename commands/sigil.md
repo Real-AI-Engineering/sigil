@@ -143,13 +143,28 @@ HAS_CI=false
 - `estimated_files` includes configuration files: `*.yml`, `*.yaml`, `*.toml`, `*.env*`, `Dockerfile`, `docker-compose.*`
 - `estimated_files` includes database-related paths: files containing `migration`, `migrate`, `schema`, `alembic`, `prisma`
 
+**Step 0.6a — Check provider availability:**
+```bash
+# Check Codex
+CODEX_AVAILABLE=false
+if command -v codex &>/dev/null; then
+  CODEX_AVAILABLE=true
+fi
+
+# Check Gemini
+GEMINI_AVAILABLE=false
+if command -v gemini &>/dev/null; then
+  GEMINI_AVAILABLE=true
+fi
+```
+
 **Step 0.7 — Agent count table:**
 
-| Risk | Explorers | Design Model | Implementers | Observer |
-|---|---|---|---|---|
-| low | 1 | sonnet | 1 | no |
-| medium | 2 | opus | 2 | yes (post-build) |
-| high | 3 | opus | 3 | yes (post-build) |
+| Risk | Explorers | Design Model | Implementers | Observer | Review Providers |
+|---|---|---|---|---|---|
+| low | 1 | sonnet | 1 | no | claude |
+| medium | 2 | opus | 2 | yes (post-build) | claude + codex (if available) |
+| high | 3 | opus | 3 | yes (post-build) | claude + codex + gemini (if available) |
 
 **Step 0.8 — Write `.dev/scope.json`:**
 ```json
@@ -166,9 +181,20 @@ HAS_CI=false
   "has_ci": false,
   "languages": ["python"],
   "review_strategy": "<simple|adversarial|consensus>",
+  "review_providers": ["claude"],
+  "consensus_model": "findings_quorum",
+  "codex_available": false,
+  "gemini_available": false,
   "started_at": "<ISO-8601 UTC timestamp>"
 }
 ```
+
+`review_providers` is computed:
+- `risk=low` → `["claude"]`
+- `risk=medium` → `["claude"]` + `["codex"]` if `CODEX_AVAILABLE=true`
+- `risk=high` → `["claude"]` + `["codex"]` if available + `["gemini"]` if available
+
+**Backward compatibility:** If reading an older scope.json where `review_providers` is absent, default to `["claude"]`. If `consensus_model` is absent, default to `"findings_quorum"` when `review_strategy=consensus`, otherwise ignored. If `codex_available`/`gemini_available` are absent, default to `false`. Old scope.json files without these fields work as Claude-only review.
 
 **Step 0.9 — Post-check:**
 ```bash
@@ -190,6 +216,7 @@ Agents:     explorer*N, implementer*N, observer=yes/no
 Est. files: N
 Languages:  python, typescript, ...
 Review:     <strategy> (suggested for risk=<risk>)
+Providers:  claude | claude+codex | claude+codex+gemini
 ```
 
 - If `risk="low"`: write `"review_strategy": "simple"` to scope.json, then proceed to Phase 1 automatically (no pause).
