@@ -477,19 +477,28 @@ Read `review_strategy` from `.dev/scope.json`. If field is missing (old session)
   - Write `.dev/review-verdict.md` using the **same format as Step 3.8e** (unified schema):
     ```
     ## Review Verdict: PASS | WARN | BLOCK
-    **Strategy:** simple
-    **Rounds:** 1
-    **Codex tiebreaker:** no
-    ### Findings (N total, M verified)
-    | # | Sev | Cat | File:Line | Claim | Source | Verified |
+    **Strategy:** simple (findings_quorum)
+    **Providers:** claude_reviewer (ok)
+    **Round 2:** no
+    **Panel tiebreaker:** no
+    ### Clusters (N total, 0 cross-provider)
+    | # | Sev | Cat | File:Line | Claim | Sources | Cross? | Diverse? | Verified | Impact |
     ...
+    ### Provider Summary
+    - claude_reviewer: N raw → M valid (ok)
+    - claude_skeptic: skipped (not applicable for simple strategy)
+    - codex: skipped
+    - gemini: skipped
     ### Verdict Reasoning
     ...
     ```
-    For simple strategy: `Source` = "reviewer" for all, `Verified` = "n/a" (no machine validation).
+    For simple strategy: each finding is a single-source cluster with `sources: ["claude_reviewer"]`, `cross_provider: false`, `diversity: false`.
   - Write `.dev/review-summary.json` with same schema as Step 3.8e:
-    `strategy: "simple"`, `rounds: 1`, `round_1.reviewer` filled, `round_1.skeptic: null`,
-    `round_2: null`, `codex_invoked: false`, `diff_sha: null` (no diff capture in simple path).
+    `strategy: "simple"`, `consensus_model: "findings_quorum"`, `rounds: 1`,
+    `providers.claude_reviewer.status: "ok"`, all other providers `status: "skipped"`,
+    `clusters` (not flat `findings`) — each finding = 1 cluster, `sources: ["claude_reviewer"]`, `cross_provider: false`,
+    `clusters_total: N`, `clusters_cross_provider: 0`,
+    `round_2: null`, `panel_tiebreaker: null`, `diff_sha: null` (no diff capture in simple path).
   - Present verdict to user:
     - PASS → go to Step 3.9
     - WARN → "Review found warnings. Proceed? (yes / fix / abort)"
