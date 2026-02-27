@@ -189,18 +189,20 @@ fi
 }
 ```
 
-`review_providers` is computed:
+`review_providers` is computed from risk + detected availability:
 - `risk=low` → `["claude"]`
 - `risk=medium` → `["claude"]` + `["codex"]` if `CODEX_AVAILABLE=true`
 - `risk=high` → `["claude"]` + `["codex"]` if available + `["gemini"]` if available
+
+Write detected availability into scope.json: `"codex_available": $CODEX_AVAILABLE`, `"gemini_available": $GEMINI_AVAILABLE` (from Step 0.6a).
 
 **Backward compatibility:** If reading an older scope.json where `review_providers` is absent, default to `["claude"]`. If `consensus_model` is absent, default to `"findings_quorum"` when `review_strategy=consensus`, otherwise ignored. If `codex_available`/`gemini_available` are absent, default to `false`. Old scope.json files without these fields work as Claude-only review.
 
 **Step 0.9 — Post-check:**
 ```bash
-jq '.risk, .feature, .agent_count, .started_at, .review_strategy' .dev/scope.json
+jq '.risk, .feature, .agent_count, .started_at, .review_strategy, .review_providers, .consensus_model, .codex_available, .gemini_available' .dev/scope.json
 ```
-Must succeed and return non-null values. If it fails: fix the JSON and retry once. If retry fails: stop and show user.
+Must succeed and return non-null values for all fields. `review_providers` must be a non-empty array. If it fails: fix the JSON and retry once. If retry fails: stop and show user.
 
 **Step 0.10 — Display scope summary.**
 
@@ -467,13 +469,7 @@ Read `review_strategy` from `.dev/scope.json`. If field is missing (old session)
 - `"simple"` → launch 1 code reviewer:
   - `subagent_type="general-purpose"`, `model="sonnet"`, `run_in_background=false`
   - Prompt: use the REVIEWER_PROMPT from `lib/prompts/reviewer.md` with `{diff}`, `{design_md}`, `{scope_json}` substituted (same prompt as adversarial path). Instruct agent to write output to `.dev/reviewer-round-1.json`.
-  - Fallback: `codex review 2>&1` → fallback: `general-purpose` sonnet with inline review prompt
-  - Codex error handling (apply after each `codex` invocation):
-    1. Check binary: `which codex` — if empty, log "Codex CLI not installed — skipping", set `codex_status: "not_installed"` in `.dev/review-summary.json`, proceed without Codex
-    2. Run the codex command
-    3. If exit=0: set `codex_status: "ok"`
-    4. If exit≠0 + stderr contains "auth" or "token": log "Codex auth expired — run `codex auth`", set `codex_status: "auth_expired"`, proceed
-    5. If exit≠0 (other): log "Codex failed: <first 200 chars of stderr>", set `codex_status: "error"`, proceed
+  - NOTE: Simple strategy uses Claude-only review. No external providers dispatched, no Codex fallback. External providers are only used in adversarial/consensus strategies via Step 3.8a.
   - Write `.dev/review-verdict.md` using the **same format as Step 3.8e** (unified schema):
     ```
     ## Review Verdict: PASS | WARN | BLOCK
@@ -498,7 +494,7 @@ Read `review_strategy` from `.dev/scope.json`. If field is missing (old session)
     `providers.claude_reviewer.status: "ok"`, all other providers `status: "skipped"`,
     `clusters` (not flat `findings`) — each finding = 1 cluster, `sources: ["claude_reviewer"]`, `cross_provider: false`,
     `clusters_total: N`, `clusters_cross_provider: 0`,
-    `round_2: null`, `panel_tiebreaker: null`, `diff_sha: null` (no diff capture in simple path).
+    `round_2: null`, `panel_tiebreaker: []`, `diff_sha: null` (no diff capture in simple path).
   - Present verdict to user:
     - PASS → go to Step 3.9
     - WARN → "Review found warnings. Proceed? (yes / fix / abort)"
@@ -577,13 +573,12 @@ If user chooses `skip-external`, set `review_providers: ["claude"]` and proceed 
 
 5b. **Build external review prompt:**
 ```bash
-# Single-pass substitution via Python (avoids cross-contamination if diff contains {design_md})
+# True single-pass substitution via regex (safe even if diff contains {design_md} or vice versa)
 python3 -c "
-import sys
+import sys, re
 tmpl = open(sys.argv[1]).read()
-diff = open(sys.argv[2]).read()
-design = open(sys.argv[3]).read()
-result = tmpl.replace('{diff}', diff).replace('{design_md}', design)
+subs = {'diff': open(sys.argv[2]).read(), 'design_md': open(sys.argv[3]).read()}
+result = re.sub(r'\{(diff|design_md)\}', lambda m: subs[m.group(1)], tmpl)
 print(result)
 " "${CLAUDE_PLUGIN_ROOT}/lib/prompts/external-reviewer.md" .dev/review-diff.txt .dev/design.md \
   > .dev/external-review-prompt.txt
@@ -610,11 +605,11 @@ Read `review_providers` from `.dev/scope.json`. For each external provider, laun
 ```bash
 REVIEW_PROMPT=$(<.dev/external-review-prompt.txt)
 OUT=$(mktemp); ERR=$(mktemp)
-echo "$REVIEW_PROMPT" | codex exec --ephemeral --skip-git-repo-check \
+printf '%s' "$REVIEW_PROMPT" | codex exec --ephemeral --skip-git-repo-check \
   -C "$PWD" -p fast --output-last-message "$OUT" - 2>"$ERR"
 CODEX_EXIT=$?
 if [ $CODEX_EXIT -ne 0 ]; then
-  if grep -qi "auth\|token\|api.key\|unauthorized" "$ERR"; then
+  if grep -Eqi 'auth|token|api.key|unauthorized' "$ERR"; then
     CODEX_STATUS="auth_expired"
   else
     CODEX_STATUS="error"
@@ -623,17 +618,17 @@ else
   CODEX_STATUS="ok"
 fi
 CODEX_RESULT=$(cat "$OUT"); rm -f "$OUT" "$ERR"
-echo "$CODEX_RESULT" > .dev/codex-round-1.json
+printf '%s' "$CODEX_RESULT" > .dev/codex-round-1.json
 ```
 
 **If "gemini" in review_providers:**
 ```bash
 REVIEW_PROMPT=$(<.dev/external-review-prompt.txt)
 ERR=$(mktemp)
-GEMINI_RESULT=$(echo "$REVIEW_PROMPT" | gemini -p - -o text 2>"$ERR")
+GEMINI_RESULT=$(printf '%s' "$REVIEW_PROMPT" | gemini -p - -o text 2>"$ERR")
 GEMINI_EXIT=$?
 if [ $GEMINI_EXIT -ne 0 ]; then
-  if grep -qi "auth\|login\|403\|401\|credentials" "$ERR"; then
+  if grep -Eqi 'auth|login|403|401|credentials' "$ERR"; then
     GEMINI_STATUS="auth_expired"
   else
     GEMINI_STATUS="error"
@@ -642,7 +637,7 @@ else
   GEMINI_STATUS="ok"
 fi
 rm -f "$ERR"
-echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
+printf '%s' "$GEMINI_RESULT" > .dev/gemini-round-1.json
 ```
 
 **Timeout:** 120 seconds per external provider. Kill and set `status: "timeout"` if exceeded.
@@ -700,9 +695,9 @@ echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
 2. **Handle unreliable agents:**
    - Both UNRELIABLE → write `## Review Verdict: UNRELIABLE` to `.dev/review-verdict.md`, ask user: "Both review agents unreliable. retry-all / skip / abort"
      - `retry-all` → re-run Step 3.8a from scratch
-     - `skip` → overwrite verdict to `## Review Verdict: SKIPPED`, write `review-summary.json` with `final_verdict: "SKIPPED"`, `findings: []`, `unreliable_agents: ["reviewer", "skeptic"]` → go to Step 3.9
+     - `skip` → overwrite verdict to `## Review Verdict: SKIPPED`, write `review-summary.json` with `final_verdict: "SKIPPED"`, `clusters: []`, `clusters_total: 0`, `unreliable_agents: ["reviewer", "skeptic"]` → go to Step 3.9
      - `abort` → write `## Review Verdict: ABORTED` → STOP
-   - One UNRELIABLE → exclude from verdict, use other agent's verdict only. Tag unreliable agent in `review-summary.json` under `unreliable_agents[]`.
+   - One UNRELIABLE → exclude that agent's findings from the cluster pool, recompute verdict from remaining validated clusters/sources. Tag unreliable agent in `review-summary.json` under `unreliable_agents[]`.
 
 3. **Cross-provider finding clustering:**
 
@@ -791,8 +786,8 @@ echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
 
 7. **Resolve disputed findings:**
    - For each disputed cluster, count confirmations across all responding providers
-   - **Majority confirms** (>50% of responding providers) → finding stands, mark `confirmed_by: [list]`
-   - **Majority refutes** (>50%) → finding removed, log in `refuted_findings[]`
+   - **Majority confirms** (>50% of responding providers) → finding stands, add `confirmed_by_round2: [list]` to cluster
+   - **Majority refutes** (>50%) → finding removed, log in `refuted_findings_round2[]` in review-summary.json
    - **Tie** → finding stands (conservative)
 
 8. **Recompute verdict** from updated cluster set (same quorum rules as Step 3.8b item 4).
@@ -821,6 +816,15 @@ echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
    # Gemini tiebreaker (only if Gemini was NOT the original source)
    ERR=$(mktemp)
    GEMINI_VOTE=$(echo "$TIEBREAKER_PROMPT" | gemini -p - -o text 2>"$ERR")
+   GEMINI_TIEBREAK_EXIT=$?
+   if [ $GEMINI_TIEBREAK_EXIT -ne 0 ]; then
+     if grep -Eqi 'auth|login|403|401|credentials' "$ERR"; then
+       GEMINI_TIEBREAK_STATUS="unavailable"  # auth expired
+     else
+       GEMINI_TIEBREAK_STATUS="unavailable"  # other error
+     fi
+     GEMINI_VOTE=""  # exclude from vote, reduce quorum
+   fi
    rm -f "$ERR"
    ```
 
@@ -833,14 +837,17 @@ echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
    - Tie → BLOCK stands (conservative)
    - Provider unavailable → excluded from vote, reduced quorum
 
-   Record in `review-summary.json` under `panel_tiebreaker`:
+   Record in `review-summary.json` under `panel_tiebreaker` (ARRAY — one entry per disputed finding):
    ```json
-   {
-     "finding_id": N,
-     "votes": {"codex": "YES|NO|unavailable", "gemini": "YES|NO|unavailable", "claude": "YES|NO"},
-     "result": "BLOCK|WARN"
-   }
+   [
+     {
+       "finding_id": N,
+       "votes": {"codex": "YES|NO|unavailable", "gemini": "YES|NO|unavailable", "claude": "YES|NO|excluded"},
+       "result": "BLOCK|WARN"
+     }
+   ]
    ```
+   Loop over ALL surviving single-provider criticals — each gets a separate panel vote.
 
 10. **Write `.dev/review-round-2-validated.json`**
 
@@ -877,7 +884,7 @@ echo "$GEMINI_RESULT" > .dev/gemini-round-1.json
     }
   ],
   "round_2": null,
-  "panel_tiebreaker": null,
+  "panel_tiebreaker": [],
   "final_verdict": "PASS|WARN|BLOCK|SKIPPED|ABORTED|UNRELIABLE",
   "findings_total": 0,
   "findings_verified": 0,

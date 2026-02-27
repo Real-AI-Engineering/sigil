@@ -76,9 +76,9 @@ The pipeline will:
 │  Scope  │───>│ Explore  │───>│  Design  │───>│  Build   │
 │ (bash)  │    │ (sonnet) │    │(son/opus)│    │ (sonnet) │
 └─────────┘    └──────────┘    └──────────┘    └──────────┘
- risk=low:      1 agent         sonnet          1 impl
- risk=med:      2 agents        opus            2 impl + observer
- risk=high:     3 agents        opus            3 impl + observer + Codex
+ risk=low:      1 agent         sonnet          1 impl      (claude only)
+ risk=med:      2 agents        opus            2 impl + observer  (claude+codex)
+ risk=high:     3 agents        opus            3 impl + observer  (claude+codex+gemini)
 ```
 
 Each phase writes a structured artifact to `.dev/`:
@@ -99,10 +99,11 @@ Post-checks validate each artifact before proceeding.
 - Findings machine-validated (file exists, line range, evidence grep, scope check)
 - Deduplication across agents
 
-**Consensus** — adversarial + escalation:
-- If Reviewer and Skeptic disagree (PASS vs BLOCK), Round 2 runs
-- Both agents re-review with merged findings
-- Codex CLI acts as tiebreaker if still blocked
+**Consensus** — adversarial + multi-AI escalation:
+- All providers (Claude + Codex + Gemini) review the diff blind in parallel
+- Findings clustered cross-provider (dedup by file + category + claim)
+- Disputed single-provider criticals trigger Round 2 (all providers confirm/refute)
+- Panel tiebreaker (vendor-excluded) if BLOCK persists on single-provider critical
 
 ## Cost Estimates
 
@@ -135,16 +136,24 @@ Findings from all providers go through the same validation pipeline (file exists
 
 If a provider is not installed or auth fails, Sigil degrades gracefully — the provider is excluded and quorum is reduced.
 
-## Optional: Codex Integration
+## External Provider Integration
 
-Sigil optionally uses [Codex CLI](https://github.com/openai/codex) for:
+Sigil optionally dispatches to external AI CLIs for independent review perspectives:
+
+**Codex CLI** ([github.com/openai/codex](https://github.com/openai/codex)):
+- **Code review** (medium/high risk) — parallel findings alongside Claude agents
 - **Design review** (high risk) — independent second opinion on architecture
-- **Tiebreaker** (consensus) — breaks deadlock between Reviewer and Skeptic
-- **Fallback reviewer** (simple) — when primary reviewer agent is unavailable
+- **Panel tiebreaker** — votes on disputed critical findings (excluded if it was the source)
 
-If Codex is not installed, Sigil degrades gracefully — all Codex steps are skipped with a logged reason. The `codex_status` field in `.dev/review-summary.json` tracks what happened: `ok`, `not_installed`, `auth_expired`, `timeout`, `error`, or `skipped`.
+**Gemini CLI** ([github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli)):
+- **Code review** (high risk) — 4th voice for maximum diversity
+- **Panel tiebreaker** — votes on disputed critical findings (excluded if it was the source)
 
-Install Codex: `npm install -g @openai/codex`
+Both are optional. If not installed or auth fails, Sigil degrades gracefully — the provider is excluded and quorum is reduced. Per-provider status is tracked in `.dev/review-summary.json` under `providers.<name>.status`: `ok`, `not_installed`, `auth_expired`, `timeout`, `error`, `abstain`, or `skipped`.
+
+**User consent:** Before sending diffs to external providers, Sigil asks for explicit confirmation (`skip-external` to opt out).
+
+Install: `npm install -g @openai/codex` / `npm install -g @anthropic-ai/gemini-cli`
 
 ## Session Resume
 
@@ -159,7 +168,7 @@ Run history is archived to `.dev/runs/<timestamp>/` after each completed build.
 
 - `.dev/` artifacts (including `review-diff.txt`) contain your full git diff. The pipeline adds `.dev/` to your project's `.gitignore` automatically (Step 0.1) — but verify this before committing.
 - Review agents analyze code content via LLM prompts. When reviewing untrusted codebases, be aware that malicious code could attempt prompt injection. The multi-agent architecture and evidence validation provide defense-in-depth but are not immune.
-- Codex integration sends design docs and diffs to an external service. Use `review=simple` or `review=adversarial` to avoid Codex calls, or uninstall Codex CLI.
+- External provider integration (Codex, Gemini) sends diffs and design docs to external services. The pipeline asks for explicit consent before dispatching. Use `skip-external` at the consent prompt, or `review=simple` to avoid external calls entirely.
 
 ## Troubleshooting
 
@@ -167,6 +176,8 @@ Run history is archived to `.dev/runs/<timestamp>/` after each completed build.
 |---------|-----|
 | `jq: command not found` | Install jq: `brew install jq` (macOS) or `apt install jq` (Linux) |
 | `codex: auth expired` | Run `codex auth` to refresh credentials |
+| `gemini: auth expired` | Run `gemini login` to re-authenticate |
+| External provider timeout | Provider killed after 120s, excluded from quorum — review continues |
 | `.dev/` exists from previous run | `/sigil` detects this and offers resume/restart/abort |
 | Plugin not loading | Verify: `ls ~/.claude/plugins/sigil/commands/sigil.md` exists and `"sigil@local": true` in `~/.claude/settings.json` `enabledPlugins` |
 
