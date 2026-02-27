@@ -13,11 +13,11 @@ Risk-adaptive development pipeline with adversarial consensus code review for [C
 
 3 review strategies, auto-selected by risk level:
 
-| Strategy | When | Agents | Rounds | Codex |
-|----------|------|--------|--------|-------|
-| simple | low risk | 1 reviewer | 1 | fallback only |
-| adversarial | medium risk | Reviewer + Skeptic (blind parallel) | 1 | no |
-| consensus | high risk | Reviewer + Skeptic | 1-2 + tiebreaker | yes |
+| Strategy | When | Claude Agents | External Providers | Rounds | Consensus |
+|----------|------|---------------|-------------------|--------|-----------|
+| simple | low risk | 1 reviewer | none | 1 | N/A |
+| adversarial | medium risk | Reviewer + Skeptic | Codex (if available) | 1 | findings quorum |
+| consensus | high risk | Reviewer + Skeptic | Codex + Gemini (if available) | 1-2 + panel | findings quorum |
 
 ## Prerequisites
 
@@ -106,13 +106,34 @@ Post-checks validate each artifact before proceeding.
 
 ## Cost Estimates
 
-| Strategy | Agents | Est. Cost | Latency |
-|----------|--------|-----------|---------|
-| simple | 1 | ~$0.03-0.05 | 1-2 min |
-| adversarial | 2 | ~$0.10-0.20 | 3-5 min |
-| consensus | 2-4 + Codex | ~$0.20-0.40 | 5-10 min |
+| Strategy | Agents | Est. Cost | Est. Time |
+|----------|--------|-----------|-----------|
+| simple | 1 Claude | ~$0.05-0.10 | 1-2 min |
+| adversarial | 2 Claude + Codex | ~$0.15-0.30 | 2-4 min |
+| consensus | 2 Claude + Codex + Gemini | ~$0.30-0.60 | 5-10 min |
 
 Costs are approximate and depend on diff size and codebase complexity.
+
+## Multi-AI Consensus
+
+Sigil uses multiple AI providers for code review, scaling with risk:
+
+- **Low risk:** Claude only (1 reviewer)
+- **Medium risk:** Claude Reviewer + Skeptic + Codex CLI (3 voices)
+- **High risk:** Claude Reviewer + Skeptic + Codex CLI + Gemini CLI (4 voices)
+
+Findings from all providers go through the same validation pipeline (file exists, line range, evidence grep) and are clustered cross-provider. The verdict is computed from clustered findings:
+
+- **Any verified critical** from any provider → BLOCK (any-veto)
+- **Important finding** confirmed by 2+ providers → WARN (quorum)
+- **Single-provider findings** → informational only
+
+### Provider Requirements
+
+- [Codex CLI](https://github.com/openai/codex) — optional, auto-detected
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli) — optional, auto-detected
+
+If a provider is not installed or auth fails, Sigil degrades gracefully — the provider is excluded and quorum is reduced.
 
 ## Optional: Codex Integration
 
