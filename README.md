@@ -30,10 +30,12 @@ Risk-adaptive development pipeline with adversarial consensus code review for [C
 
 ### Via Emporium (recommended)
 
+<!-- INSTALL:START — auto-synced from emporium/INSTALL_REFERENCE.md -->
 ```bash
 claude plugin marketplace add heurema/emporium   # once
 claude plugin install sigil@emporium
 ```
+<!-- INSTALL:END -->
 
 ### Manual
 
