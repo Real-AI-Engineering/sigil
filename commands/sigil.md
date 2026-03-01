@@ -1000,8 +1000,13 @@ printf '%s' "$GEMINI_RESULT" > .dev/gemini-round-1.json
 **Step 3.8e — Final Output:**
 
 1. **Write `.dev/review-summary.json`** with this schema:
+
+> `overall_status` is computed deterministically from provider statuses. PARTIAL_SUCCESS means some provider findings are missing — proceed with available data.
+
 ```json
 {
+  "overall_status": "SUCCESS | PARTIAL_SUCCESS | FAILURE",
+  "_overall_status_logic": "SUCCESS=all providers ok; PARTIAL_SUCCESS=≥1 ok + ≥1 failed; FAILURE=all failed",
   "strategy": "simple|adversarial|consensus",
   "consensus_model": "findings_quorum",
   "rounds": 1,
