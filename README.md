@@ -1,73 +1,27 @@
 # Sigil
 
-Risk-adaptive development pipeline with adversarial consensus code review for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+> Risk-adaptive dev pipeline with adversarial code review
 
-## What It Does
+Sigil is a Claude Code plugin that turns a feature description into a complete development cycle — risk assessment, codebase mapping, architecture design, implementation, and multi-agent code review. One command, four phases.
 
-4-phase pipeline that scales review rigor to match task complexity:
+Review rigor scales automatically with complexity. Low-risk changes get a fast single-reviewer pass. High-risk changes escalate to adversarial consensus: independent AI agents (Claude Reviewer + Skeptic + Codex + Gemini) review the same diff blind, with machine-validated findings and cross-provider verification.
 
-- **Scope** — deterministic precompute: branch creation, risk assessment, agent planning (zero LLM)
-- **Explore** — codebase mapping with parallel sonnet agents
-- **Design** — architecture doc with user approval gate (opus for medium/high risk)
-- **Build** — implementation + test execution + observer + adversarial code review
-
-3 review strategies, auto-selected by risk level:
-
-| Strategy | When | Claude Agents | External Providers | Rounds | Consensus |
-|----------|------|---------------|-------------------|--------|-----------|
-| simple | low risk | 1 reviewer | none | 1 | N/A |
-| adversarial | medium risk | Reviewer + Skeptic | Codex (if available) | 1 | findings quorum |
-| consensus | high risk | Reviewer + Skeptic | Codex + Gemini (if available) | 1-2 + panel | findings quorum |
-
-## Prerequisites
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v2.1.47+
-- `git` (initialized repo)
-- `jq` (used for scope parsing and post-checks)
-- Optional: [Codex CLI](https://github.com/openai/codex) for design review and tiebreaker
-
-## Install
-
-### Via Emporium (recommended)
-
-<!-- INSTALL:START — auto-synced from emporium/INSTALL_REFERENCE.md -->
-```bash
-claude plugin marketplace add heurema/emporium   # once
-claude plugin install sigil@emporium
 ```
-<!-- INSTALL:END -->
-
-### Manual
-
-```bash
-git clone https://github.com/heurema/sigil.git ~/.claude/plugins/sigil
+/sigil add JWT authentication to the API
 ```
-
-Then enable in `~/.claude/settings.json`:
-
-```json
-{
-  "enabledPlugins": {
-    "sigil@local": true
-  }
-}
-```
-
-If the file already exists, add `"sigil@local": true` inside the existing `enabledPlugins` object. Note: the key must be `enabledPlugins` (not `plugins`).
-
-Verify: `ls ~/.claude/plugins/sigil/commands/sigil.md` should show the command file. Then open a new Claude Code session.
 
 ## Quick Start
 
-```
+```bash
+# Install
+claude plugin marketplace add heurema/emporium   # once
+claude plugin install sigil@emporium
+
+# Use — describe what you want to build
 /sigil add user authentication with JWT
 ```
 
-The pipeline will:
-1. Assess risk and create a feature branch
-2. Explore the codebase with parallel agents
-3. Design the implementation (requires your approval)
-4. Build, test, review, and present a summary
+Sigil assesses risk, maps the codebase, presents a design for your approval, implements the code, and reviews it — all automatically.
 
 ## How It Works
 
@@ -76,125 +30,41 @@ The pipeline will:
 │  Scope  │───>│ Explore  │───>│  Design  │───>│  Build   │
 │ (bash)  │    │ (sonnet) │    │(son/opus)│    │ (sonnet) │
 └─────────┘    └──────────┘    └──────────┘    └──────────┘
- risk=low:      1 agent         sonnet          1 impl      (claude only)
- risk=med:      2 agents        opus            2 impl + observer  (claude+codex)
- risk=high:     3 agents        opus            3 impl + observer  (claude+codex+gemini)
 ```
 
-Each phase writes a structured artifact to `.dev/`:
-- `scope.json` — risk level, agent counts, review strategy
-- `exploration.md` — codebase map, patterns, constraints
-- `design.md` — architecture, files, test plan, risks
-- `review-verdict.md` + `review-summary.json` — review results
+| Risk  | Explore | Design  | Build        | Review Strategy |
+|-------|---------|---------|--------------|-----------------|
+| low   | 1 agent | sonnet  | 1 agent      | simple (1 reviewer) |
+| med   | 2 agents| opus    | 2 + observer | adversarial (Reviewer + Skeptic + Codex) |
+| high  | 3 agents| opus    | 3 + observer | consensus (all providers, 2 rounds) |
 
-Post-checks validate each artifact before proceeding.
+## Key Features
 
-## Review Strategies
+- **4-phase pipeline**: Scope (zero-LLM) → Explore → Design (approval gate) → Build + Review
+- **3 review strategies** auto-selected by risk: simple, adversarial, consensus
+- **Machine-validated findings**: file existence, line range, evidence grep, scope check — hallucinated findings are silently dropped
+- **Session resume**: interrupt and pick up where you left off
+- **External AI optional**: Codex and Gemini provide independent review perspectives with explicit consent
 
-**Simple** — single code reviewer. Fast, cheap. Auto-selected for low-risk changes.
+## Privacy & Data
 
-**Adversarial** — two agents review the same diff blind:
-- *Reviewer*: finds code bugs, security issues, logic errors
-- *Skeptic*: finds spec gaps, missing tests, hallucinated functionality
-- Findings machine-validated (file exists, line range, evidence grep, scope check)
-- Deduplication across agents
+All orchestration runs inside Claude Code. External AI providers (Codex CLI, Gemini CLI) are **optional** — they require explicit consent and receive only the diff, never your full codebase. Use `skip-external` to opt out entirely. No API keys required. No telemetry. Artifacts stored in `.dev/` (auto-added to `.gitignore`).
 
-**Consensus** — adversarial + multi-AI escalation:
-- All providers (Claude + Codex + Gemini) review the diff blind in parallel
-- Findings clustered cross-provider (dedup by file + category + claim)
-- Disputed single-provider criticals trigger Round 2 (all providers confirm/refute)
-- Panel tiebreaker (vendor-excluded) if BLOCK persists on single-provider critical
+## Requirements
 
-## Cost Estimates
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v2.1.47+
+- `git`, `jq`
+- Optional: [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 
-| Strategy | Agents | Est. Cost | Est. Time |
-|----------|--------|-----------|-----------|
-| simple | 1 Claude | ~$0.05-0.10 | 1-2 min |
-| adversarial | 2 Claude + Codex | ~$0.15-0.30 | 2-4 min |
-| consensus | 2 Claude + Codex + Gemini | ~$0.30-0.60 | 5-10 min |
+## Documentation
 
-Costs are approximate and depend on diff size and codebase complexity.
+- **[How it Works](docs/how-it-works.md)** — architecture, review pipeline, trust boundaries
+- **[Reference](docs/reference.md)** — usage examples, artifacts, troubleshooting, cost estimates
 
-## Multi-AI Consensus
+## Links
 
-Sigil uses multiple AI providers for code review, scaling with risk:
-
-- **Low risk:** Claude only (1 reviewer)
-- **Medium risk:** Claude Reviewer + Skeptic + Codex CLI (3 voices)
-- **High risk:** Claude Reviewer + Skeptic + Codex CLI + Gemini CLI (4 voices)
-
-Findings from all providers go through the same validation pipeline (file exists, line range, evidence grep) and are clustered cross-provider. The verdict is computed from clustered findings:
-
-- **Any verified critical** from any provider → BLOCK (any-veto)
-- **Important finding** confirmed by 2+ providers → WARN (quorum)
-- **Single-provider findings** → informational only
-
-### Provider Requirements
-
-- [Codex CLI](https://github.com/openai/codex) — optional, auto-detected
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) — optional, auto-detected
-
-If a provider is not installed or auth fails, Sigil degrades gracefully — the provider is excluded and quorum is reduced.
-
-## External Provider Integration
-
-Sigil optionally dispatches to external AI CLIs for independent review perspectives:
-
-**Codex CLI** ([github.com/openai/codex](https://github.com/openai/codex)):
-- **Code review** (medium/high risk) — parallel findings alongside Claude agents
-- **Design review** (high risk) — independent second opinion on architecture
-- **Panel tiebreaker** — votes on disputed critical findings (excluded if it was the source)
-
-**Gemini CLI** ([github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli)):
-- **Code review** (high risk) — 4th voice for maximum diversity
-- **Panel tiebreaker** — votes on disputed critical findings (excluded if it was the source)
-
-Both are optional. If not installed or auth fails, Sigil degrades gracefully — the provider is excluded and quorum is reduced. Per-provider status is tracked in `.dev/review-summary.json` under `providers.<name>.status`: `ok`, `not_installed`, `auth_expired`, `timeout`, `error`, `abstain`, or `skipped`.
-
-**User consent:** Before sending diffs to external providers, Sigil asks for explicit confirmation (`skip-external` to opt out).
-
-Install: `npm install -g @openai/codex` / `npm install -g @anthropic-ai/gemini-cli`
-
-## Session Resume
-
-If you interrupt a `/sigil` session, the pipeline detects existing `.dev/` artifacts on restart and offers:
-- **resume** — continue from the next incomplete phase
-- **restart** — clear artifacts, start fresh
-- **abort** — stop
-
-Run history is archived to `.dev/runs/<timestamp>/` after each completed build.
-
-## Security Notes
-
-- `.dev/` artifacts (including `review-diff.txt`) contain your full git diff. The pipeline adds `.dev/` to your project's `.gitignore` automatically (Step 0.1) — but verify this before committing.
-- Review agents analyze code content via LLM prompts. When reviewing untrusted codebases, be aware that malicious code could attempt prompt injection. The multi-agent architecture and evidence validation provide defense-in-depth but are not immune.
-- External provider integration (Codex, Gemini) sends diffs and design docs to external services. The pipeline asks for explicit consent before dispatching. Use `skip-external` at the consent prompt, or `review=simple` to avoid external calls entirely.
-
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| `jq: command not found` | Install jq: `brew install jq` (macOS) or `apt install jq` (Linux) |
-| `codex: auth expired` | Run `codex auth` to refresh credentials |
-| `gemini: auth expired` | Run `gemini login` to re-authenticate |
-| External provider timeout | Provider killed after 120s, excluded from quorum — review continues |
-| `.dev/` exists from previous run | `/sigil` detects this and offers resume/restart/abort |
-| Plugin not loading | Verify: `ls ~/.claude/plugins/sigil/commands/sigil.md` exists and `"sigil@local": true` in `~/.claude/settings.json` `enabledPlugins` |
-
-## Configuration (v2 Roadmap)
-
-Coming in v2:
-- `.sigil.json` project overrides (custom risk thresholds, review strategy, agent counts)
-- Configurable timeouts and cost limits
-
-## See Also
-
-Other [heurema](https://github.com/heurema) projects:
-
-- **[herald](https://github.com/heurema/herald)** — daily curated news digest plugin for Claude Code
-- **[teams-field-guide](https://github.com/heurema/teams-field-guide)** — comprehensive guide to Claude Code multi-agent teams
-- **[arbiter](https://github.com/heurema/arbiter)** — multi-AI orchestrator (Codex + Gemini)
-- **[proofpack](https://github.com/heurema/proofpack)** — proof-carrying CI gate for AI agent changes
+- [skill7.dev/development/sigil](https://skill7.dev/development/sigil)
+- [Report Issue](https://github.com/heurema/sigil/issues)
 
 ## License
 
