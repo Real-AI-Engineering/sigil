@@ -185,6 +185,7 @@ fi
   "consensus_model": "findings_quorum",
   "codex_available": false,
   "gemini_available": false,
+  "build_strategy": "normal",
   "started_at": "<ISO-8601 UTC timestamp>"
 }
 ```
@@ -196,11 +197,25 @@ fi
 
 Write detected availability into scope.json: `"codex_available": $CODEX_AVAILABLE`, `"gemini_available": $GEMINI_AVAILABLE` (from Step 0.6a).
 
-**Backward compatibility:** If reading an older scope.json where `review_providers` is absent, default to `["claude"]`. If `consensus_model` is absent, default to `"findings_quorum"` when `review_strategy=consensus`, otherwise ignored. If `codex_available`/`gemini_available` are absent, default to `false`. Old scope.json files without these fields work as Claude-only review.
+**Backward compatibility:** If reading an older scope.json where `review_providers` is absent, default to `["claude"]`. If `consensus_model` is absent, default to `"findings_quorum"` when `review_strategy=consensus`, otherwise ignored. If `codex_available`/`gemini_available` are absent, default to `false`. Old scope.json files without these fields work as Claude-only review. If `build_strategy` is absent, default to `"normal"` (standard Phase 3 flow). Diverge is opt-in only.
 
 **Step 0.9 — Post-check:**
+
+Before the assertion, ensure `build_strategy` is non-null:
 ```bash
-jq '.risk, .feature, .agent_count, .started_at, .review_strategy, .review_providers, .consensus_model, .codex_available, .gemini_available' .dev/scope.json
+BUILD_STRATEGY=$(jq -r '.build_strategy // empty' .dev/scope.json)
+if [ -z "$BUILD_STRATEGY" ]; then
+  jq '.build_strategy = "normal"' .dev/scope.json > .dev/scope.json.tmp && mv .dev/scope.json.tmp .dev/scope.json
+  BUILD_STRATEGY="normal"
+fi
+if [ "$BUILD_STRATEGY" != "normal" ] && [ "$BUILD_STRATEGY" != "diverge" ] && [ "$BUILD_STRATEGY" != "diverge-lite" ]; then
+  echo "WARNING: Unknown build_strategy '$BUILD_STRATEGY'. Defaulting to 'normal'."
+  jq '.build_strategy = "normal"' .dev/scope.json > .dev/scope.json.tmp && mv .dev/scope.json.tmp .dev/scope.json
+fi
+```
+
+```bash
+jq '.risk, .feature, .agent_count, .started_at, .build_strategy, .review_strategy, .review_providers, .consensus_model, .codex_available, .gemini_available' .dev/scope.json
 ```
 Must succeed and return non-null values for all fields. `review_providers` must be a non-empty array. If it fails: fix the JSON and retry once. If retry fails: stop and show user.
 
@@ -219,12 +234,17 @@ Est. files: N
 Languages:  python, typescript, ...
 Review:     <strategy> (suggested for risk=<risk>)
 Providers:  claude | claude+codex | claude+codex+gemini
+Build:      normal | diverge | diverge-lite
 ```
+
+If `jq '(.estimated_files | length) // 0' .dev/scope.json` > 10 AND risk != "low": suggest `build=diverge`
+If `$ARGUMENTS` matches `refactor|redesign|migrate|rewrite`: suggest `build=diverge`
 
 - If `risk="low"`: write `"review_strategy": "simple"` to scope.json, then proceed to Phase 1 automatically (no pause).
 - If `risk="medium"` or `risk="high"`: ask user to confirm scope before proceeding:
   > Scope summary above. Review strategy: `<default>`. Proceed? (yes / adjust / abort)
   > To override strategy, type: `review=simple`, `review=adversarial`, or `review=consensus`
+  > To override build: `build=diverge` (3 independent solutions), `build=diverge-lite` (3 designs, no code)
   - "yes": proceed to Phase 1
   - `review=simple` / `review=adversarial` / `review=consensus`: persist the override by writing the new value to `.dev/scope.json` under `"review_strategy"`, then proceed to Phase 1
   - "adjust": user provides corrections (e.g., override risk level), update scope.json, re-display
@@ -385,6 +405,132 @@ Handle responses:
 BASE_REF=$(jq -r '.base_ref' .dev/scope.json) || { echo "FATAL: jq failed reading scope.json"; exit 1; }
 if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then echo "FATAL: base_ref is empty/null in scope.json"; exit 1; fi
 ```
+
+**Step 3.1a — Check build_strategy:**
+
+Read `build_strategy` from scope.json (default: `"normal"` if absent).
+
+If `build_strategy == "diverge"`:
+  → Execute arbiter diverge flow (Steps 3.D1–3.D10 below)
+  → Write `"build_strategy": "normal"` to scope.json (prevent re-trigger on resume)
+  → Resume at Step 3.4 (test suite — sigil handles tests/observer/review from here)
+
+If `build_strategy == "diverge-lite"`:
+  → Execute arbiter diverge --lite flow
+  → On selection: overwrite .dev/design.md with selected design
+  → Write `"build_strategy": "normal"` to scope.json
+  → Resume from Step 3.2 (plan tasks from updated design.md)
+
+If `build_strategy == "normal"` (or absent):
+  → Continue with standard Phase 3 flow (proceed to Step 3.2)
+
+---
+
+#### Steps 3.D1–3.D10: Arbiter Diverge Flow
+
+**Step 3.D1 — Preflight (clean tree check):**
+
+```bash
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: Working tree has uncommitted changes."
+  echo "Diverge requires a clean tree so all worktrees start from identical state."
+  echo "Options: stash / commit / abort"
+fi
+```
+
+- "stash" → `git stash push -m "diverge: pre-run stash"`, proceed
+- "commit" → ask user to commit first, then re-run
+- "abort" → stop
+
+Run `git worktree prune` to clean stale registrations from prior crashes.
+
+**Step 3.D2 — Freeze Problem Pack:**
+
+```bash
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+BASE_COMMIT="$(git rev-parse HEAD)"
+RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/arbiter-diverge.XXXXXX")"
+chmod 700 "$RUN_DIR"
+```
+
+Write `$RUN_DIR/diverge-pack.json` with: `run_id`, `spec` (from .dev/design.md), `context_files` + `context_contents` (from .dev/exploration.md), `constraints`, `base_commit`, `strategies`, `providers`, `timeout_seconds` (default: 300), `lite: false`, `created_at`.
+
+Copy the pack into each worktree after creation (untracked files are not inherited by worktrees).
+
+**Step 3.D3 — Create 3 worktrees (secure RUN_DIR):**
+
+```bash
+declare -A WT
+for LABEL in A B C; do
+  WT[$LABEL]="$RUN_DIR/$LABEL"
+  git worktree add --detach "${WT[$LABEL]}" "$BASE_COMMIT"
+done
+trap cleanup_diverge EXIT
+```
+
+Where `cleanup_diverge` removes all 3 worktrees and `$RUN_DIR`.
+
+**Step 3.D4 — Generate prompt files in each worktree:**
+
+Write `.dev/diverge-prompt.md` into each worktree with: strategy hint, specification (design.md content), context files (exploration.md content), constraints, and rules (do NOT commit; write `.dev/diverge-card.json` self-assessment card).
+
+Default strategy assignment: A=minimal (Claude), B=refactor (Codex), C=redesign (Gemini).
+
+**Step 3.D5 — Dispatch 3 agents (background, timeout-wrapped):**
+
+- **Claude:** `subagent_type="general-purpose"`, `model="sonnet"`, `run_in_background=true`, working directory `${WT[A]}`
+- **Codex:** `run_with_timeout $TIMEOUT codex exec --full-auto -C "${WT[B]}" "$(cat prompt)"` — capture stdout/stderr, parse auth/timeout errors
+- **Gemini:** `run_with_timeout $TIMEOUT sh -c "cd '${WT[C]}' && gemini -p '$(cat prompt)' -y -o text"` — capture stdout/stderr, parse auth/timeout errors
+
+If a provider is unavailable: skip and redistribute its strategy to an available provider in a new worktree. If all fail: STOP, show errors, suggest `arbiter implement`.
+
+**Step 3.D6 — Collect stats + cards (staged evaluation Pass 1):**
+
+For each worktree: `git diff --name-status $BASE_COMMIT`, `git diff --numstat $BASE_COMMIT`, read `.dev/diverge-card.json` (fallback to empty card). Build anonymized Per-Solution Cards (labels 1/2/3, not A/B/C). Store provider mapping in `$RUN_DIR/label-map.json` — do NOT pass to evaluator.
+
+**Step 3.D7 — Run tests on all 3 (opt-in only):**
+
+Only if `--run-tests` flag is set (not default). If skipped: note that tests run on selected solution after merge (Step 3.4).
+
+```bash
+for LABEL in A B C; do
+  (cd "${WT[$LABEL]}" && $TEST_COMMAND 2>&1) > "$RUN_DIR/$LABEL-test-results.txt"
+  echo "exit:$?" >> "$RUN_DIR/$LABEL-test-results.txt"
+done
+```
+
+**Step 3.D8 — Decision matrix (separate anonymized evaluator):**
+
+Spawn a separate evaluator agent (`subagent_type="general-purpose"`, `model="sonnet"`, `run_in_background=false`). Pass: 3 anonymized solution cards, name-status diffs, numstats, original spec. No provider names. Weighted totals are computed programmatically (not by LLM):
+
+Weights: correctness=5, change_size=3, maintainability=4, test_coverage=4, backward_compat=3, performance=2, security=5.
+
+Present the full Diverge Report with summary table, decision matrix, and recommendation. Options: Merge 1/2/3, Inspect full diff, Hybrid cherry-pick, Discard all.
+
+**Step 3.D9 — User selects:**
+
+After selection, reveal provider mapping: `Solution 1 = Claude | Solution 2 = Codex | Solution 3 = Gemini`.
+
+**Step 3.D10 — Merge selected solution (branch only for selected, exclude .dev/):**
+
+```bash
+SELECTED_BRANCH="diverge/$RUN_ID-selected"
+# Verify HEAD hasn't moved
+CURRENT_HEAD="$(git rev-parse HEAD)"
+if [ "$CURRENT_HEAD" != "$BASE_COMMIT" ]; then
+  echo "WARNING: HEAD moved during diverge. Merge may have conflicts. Proceed? (yes / abort)"
+fi
+git -C "${WT[$SELECTED_LABEL]}" switch -c "$SELECTED_BRANCH"
+git -C "${WT[$SELECTED_LABEL]}" add -A -- . ':!.dev/'
+git -C "${WT[$SELECTED_LABEL]}" commit -m "diverge: <spec summary> (strategy: <strategy>)"
+git merge --no-ff "$SELECTED_BRANCH"
+```
+
+Save `.dev/diverge-report.md` with full report + selection metadata. Then call `cleanup_diverge`.
+
+Write `"build_strategy": "normal"` to scope.json. Resume at Step 3.4 (sigil handles tests, observer, and review from here — they are NOT duplicated in the diverge flow).
+
+---
 
 **Step 3.2 — Plan tasks from `## Files` section of design.md.** Group files by independence (files that don't share imports/deps can be done in parallel).
 
