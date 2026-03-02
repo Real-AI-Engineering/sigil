@@ -271,8 +271,14 @@ Run codex and attempt 3-level parsing:
 
 ```bash
 # Run codex
-timeout 180 codex -q "$(cat .signum/review_prompt_codex.txt)" > .signum/reviews/codex_raw.txt 2>&1
+PROMPT=$(cat .signum/review_prompt_codex.txt)
+codex -q "$PROMPT" > .signum/reviews/codex_raw.txt 2>&1 &
+CODEX_PID=$!
+( sleep 180; kill $CODEX_PID 2>/dev/null ) &
+TIMER_PID=$!
+wait $CODEX_PID 2>/dev/null
 CODEX_EXIT=$?
+kill $TIMER_PID 2>/dev/null; wait $TIMER_PID 2>/dev/null
 
 # Level 1: valid JSON directly
 if jq -e '.verdict' .signum/reviews/codex_raw.txt > /dev/null 2>&1; then
@@ -337,8 +343,14 @@ sed -e "s|{contract_json}|$CONTRACT|g" \
 Run gemini with same 3-level parsing:
 
 ```bash
-timeout 180 gemini -p "$(cat .signum/review_prompt_gemini.txt)" > .signum/reviews/gemini_raw.txt 2>&1
+PROMPT=$(cat .signum/review_prompt_gemini.txt)
+gemini -p "$PROMPT" > .signum/reviews/gemini_raw.txt 2>&1 &
+GEMINI_PID=$!
+( sleep 180; kill $GEMINI_PID 2>/dev/null ) &
+TIMER_PID=$!
+wait $GEMINI_PID 2>/dev/null
 GEMINI_EXIT=$?
+kill $TIMER_PID 2>/dev/null; wait $TIMER_PID 2>/dev/null
 
 if jq -e '.verdict' .signum/reviews/gemini_raw.txt > /dev/null 2>&1; then
   cp .signum/reviews/gemini_raw.txt .signum/reviews/gemini.json
