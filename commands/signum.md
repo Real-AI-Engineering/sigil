@@ -83,11 +83,19 @@ If the file is missing or INVALID, stop and report: "Contractor agent failed to 
 Use the Bash tool:
 
 ```bash
+# Check 1: requiredInputsProvided (contractor cannot resolve ambiguity from codebase alone)
+REQ_OK=$(jq -r '.requiredInputsProvided // true' .signum/contract.json)
+if [ "$REQ_OK" = "false" ]; then
+  echo "HARD STOP: requiredInputsProvided=false"
+  jq -r '"Contractor needs additional input:\n  - " + ((.openQuestions // []) | join("\n  - "))' .signum/contract.json
+fi
+
+# Check 2: open questions (ambiguities requiring user clarification)
 jq -r 'if (.openQuestions | length) > 0 then "BLOCKED: " + (.openQuestions | join("\n  - ")) else "OK" end' \
   .signum/contract.json
 ```
 
-If output starts with `BLOCKED:`, display the open questions to the user exactly as listed, then **STOP**.
+If output contains `HARD STOP:` or starts with `BLOCKED:`, display the questions to the user and **STOP**. Do not proceed to Phase 2 until the user provides answers.
 
 Do not proceed to Phase 2 until the user provides answers to every open question. When answers are received, re-launch the contractor agent with the original request plus the answers appended, and repeat Step 1.2–1.3.
 
