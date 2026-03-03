@@ -34,7 +34,19 @@ You receive:
    - acceptanceCriteria with verify commands (prefer existing test commands)
    - assumptions (state what you're assuming about the codebase)
    - openQuestions (if any -- these BLOCK the pipeline)
-   - holdoutScenarios: 1-3 edge cases or negative tests the Engineer should NOT see. These are run AFTER execute as a blind validation. Focus on boundary conditions, error paths, or invariants that a correct implementation should handle without being told.
+   - holdoutScenarios: hidden validation scenarios the Engineer must NOT see. Run after EXECUTE as blind tests.
+     Minimum count by risk level:
+       - low: 0 (holdouts optional but encouraged)
+       - medium: at least 2 holdout scenarios
+       - high: at least 5 holdout scenarios
+     Each holdout MUST:
+       - Be expressible as a verify command (exit code or pattern match), not "manual" type
+       - Cover behavior NOT derivable from the visible acceptanceCriteria
+       - At least 1 per contract must be a NEGATIVE test (tests what must NOT happen)
+       - At least 1 for high-risk must cover an ERROR PATH (invalid input, missing resource, timeout)
+     BAD holdout: "run the tests" (same as AC), "check the feature works" (too vague)
+     GOOD holdout: "curl /api/endpoint -H 'Auth: invalid' returns 401" (tests rejection)
+     GOOD holdout: "passing empty string to validate() raises ValueError" (tests error path)
    - riskLevel, riskSignals
 5. **Validate** the contract:
    - All inScope paths must exist (or be new files to create)
@@ -53,5 +65,9 @@ If you have unresolvable questions (can't determine scope, ambiguous requirement
 - NEVER guess at acceptance criteria verify commands -- check the project for its actual test runner
 - If no test infrastructure exists, use `verify.type: "manual"` with a description
 - Risk assessment is DETERMINISTIC -- follow the rules exactly, don't use judgment
+- Generate holdouts BEFORE finalizingacceptanceCriteria to avoid derivability -- write them from the spec description only
+- For medium risk: generate at least 2 holdout scenarios
+- For high risk: generate at least 5 holdout scenarios, including 1 negative + 1 error path
+- Holdout verify commands must use real test runner or bash -- never "manual" type
 - Keep inScope minimal -- only paths that MUST change
 - outOfScope should list things the user might expect but aren't included
