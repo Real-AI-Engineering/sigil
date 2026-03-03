@@ -578,6 +578,49 @@ fi
 
 If scope violation, **STOP**. Do not proceed to Phase 3.
 
+### Step 2.4.5: Policy compliance check
+
+Use the Bash tool to verify the Engineer's changes comply with `contract-policy.json`:
+
+```bash
+if [ ! -f ".signum/contract-policy.json" ]; then
+  echo "contract-policy.json not found, skipping policy check"
+  echo '{"violations":[]}' > .signum/policy_violations.json
+else
+  FILE_COUNT=$(git diff --name-only | wc -l | tr -d '[:space:]')
+  MAX_FILES=$(jq '.max_files_changed' .signum/contract-policy.json)
+
+  VIOLS='[]'
+
+  # Check 1: file count limit
+  if [ "$FILE_COUNT" -gt "$MAX_FILES" ]; then
+    VIOLS=$(printf '%s' "$VIOLS" | jq --arg v "TOO_MANY_FILES: $FILE_COUNT changed, policy max is $MAX_FILES" '. + [$v]')
+  fi
+
+  # Check 2: dangerous bash patterns in diff content
+  DIFF=$(git diff HEAD 2>/dev/null || true)
+  while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    if printf '%s' "$DIFF" | grep -qE "$pat" 2>/dev/null; then
+      VIOLS=$(printf '%s' "$VIOLS" | jq --arg v "DENIED_PATTERN in diff: $pat" '. + [$v]')
+    fi
+  done < <(jq -r '.bash_deny_patterns[]' .signum/contract-policy.json)
+
+  printf '%s' "$VIOLS" | jq '{violations: .}' > .signum/policy_violations.json
+  VIOL_COUNT=$(printf '%s' "$VIOLS" | jq 'length')
+
+  if [ "$VIOL_COUNT" -gt 0 ]; then
+    echo "POLICY VIOLATIONS ($VIOL_COUNT):"
+    printf '%s' "$VIOLS" | jq -r '.[]' | sed 's/^/  - /'
+    echo "AUTO_BLOCK"
+  else
+    echo "Policy check: PASS ($FILE_COUNT files, max $MAX_FILES)"
+  fi
+fi
+```
+
+If output contains `AUTO_BLOCK`, **STOP**. Do not proceed to Phase 3.
+
 ---
 
 ## Phase 3: AUDIT
