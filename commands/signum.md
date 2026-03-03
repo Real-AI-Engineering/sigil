@@ -99,6 +99,105 @@ If output contains `HARD STOP:` or starts with `BLOCKED:`, display the questions
 
 Do not proceed to Phase 2 until the user provides answers to every open question. When answers are received, re-launch the contractor agent with the original request plus the answers appended, and repeat Step 1.2–1.3.
 
+### Step 1.3.5: Spec quality check
+
+Use the Bash tool to score the contract on 6 dimensions. A score below 60 (grade D) means the contract is too vague for reliable autonomous execution.
+
+```bash
+GOAL=$(jq -r '.goal' .signum/contract.json)
+AC_COUNT=$(jq '.acceptanceCriteria | length' .signum/contract.json)
+AC_WITH_VERIFY=$(jq '[.acceptanceCriteria[] | select(.verify.type and .verify.value)] | length' .signum/contract.json)
+INSCOPE_COUNT=$(jq '.inScope | length' .signum/contract.json)
+HAS_OUTOFSCOPE=$(jq 'if (.outOfScope | length) > 0 then 1 else 0 end' .signum/contract.json)
+HAS_ASSUMPTIONS=$(jq 'if (.assumptions | length) > 0 then 1 else 0 end' .signum/contract.json)
+HAS_HOLDOUTS=$(jq 'if ((.holdoutScenarios // []) | length) > 0 then 1 else 0 end' .signum/contract.json)
+REQ_OK=$(jq -r '.requiredInputsProvided // true' .signum/contract.json)
+OPEN_Q=$(jq '(.openQuestions | length)' .signum/contract.json)
+
+# Testability (0-25): fraction of ACs with verify commands
+if [ "$AC_COUNT" -gt 0 ]; then
+  TESTABILITY=$((AC_WITH_VERIFY * 25 / AC_COUNT))
+else
+  TESTABILITY=0
+fi
+
+# Completeness (0-10)
+COMPLETENESS=0
+[ "$REQ_OK" = "true" ] && COMPLETENESS=$((COMPLETENESS + 5))
+[ "$OPEN_Q" -eq 0 ] && COMPLETENESS=$((COMPLETENESS + 5))
+
+# Scope boundedness (0-15)
+if [ "$INSCOPE_COUNT" -lt 5 ]; then
+  SCOPE_SCORE=15
+elif [ "$INSCOPE_COUNT" -lt 16 ]; then
+  SCOPE_SCORE=10
+else
+  SCOPE_SCORE=5
+fi
+[ "$HAS_OUTOFSCOPE" -eq 1 ] && SCOPE_SCORE=$((SCOPE_SCORE + 3))
+[ "$SCOPE_SCORE" -gt 15 ] && SCOPE_SCORE=15
+
+# Negative coverage (0-20): holdouts + negative-language ACs
+NEG_SCORE=0
+[ "$HAS_HOLDOUTS" -eq 1 ] && NEG_SCORE=$((NEG_SCORE + 10))
+NEG_ACS=$(jq '[.acceptanceCriteria[] | select(.description | test("must not|should not|\\bnever\\b|\\bprevent|reject|fail|invalid"; "i"))] | length' .signum/contract.json)
+[ "$NEG_ACS" -gt 0 ] && NEG_SCORE=$((NEG_SCORE + 10))
+
+# Clarity (0-20): goal length + absence of vague phrases
+GOAL_LEN=${#GOAL}
+CLARITY=0
+[ "$GOAL_LEN" -ge 20 ] && [ "$GOAL_LEN" -le 300 ] && CLARITY=$((CLARITY + 10))
+VAGUE=$(echo "$GOAL" | grep -ci "works correctly\|as expected\|properly\|should work" 2>/dev/null || echo 0)
+[ "$VAGUE" -eq 0 ] && CLARITY=$((CLARITY + 10))
+
+# Boundary system (0-10): outOfScope + assumptions present
+BOUNDARY=0
+[ "$HAS_OUTOFSCOPE" -eq 1 ] && BOUNDARY=$((BOUNDARY + 5))
+[ "$HAS_ASSUMPTIONS" -eq 1 ] && BOUNDARY=$((BOUNDARY + 5))
+
+TOTAL=$((TESTABILITY + COMPLETENESS + SCOPE_SCORE + NEG_SCORE + CLARITY + BOUNDARY))
+
+if [ "$TOTAL" -ge 90 ]; then GRADE="A"
+elif [ "$TOTAL" -ge 75 ]; then GRADE="B"
+elif [ "$TOTAL" -ge 60 ]; then GRADE="C"
+else GRADE="D"
+fi
+
+echo "Spec quality: $TOTAL/100 (grade $GRADE)"
+echo "  Testability:       $TESTABILITY/25 (ACs with verify: $AC_WITH_VERIFY/$AC_COUNT)"
+echo "  Negative coverage: $NEG_SCORE/20 (holdouts: $HAS_HOLDOUTS, negative ACs: $NEG_ACS)"
+echo "  Clarity:           $CLARITY/20 (goal length: $GOAL_LEN chars)"
+echo "  Scope boundedness: $SCOPE_SCORE/15 (files in scope: $INSCOPE_COUNT)"
+echo "  Completeness:      $COMPLETENESS/10"
+echo "  Boundary system:   $BOUNDARY/10"
+
+if [ "$GRADE" = "D" ]; then
+  echo ""
+  echo "SPEC QUALITY GATE FAILED (grade D, score $TOTAL/100)"
+  echo "Gaps:"
+  [ "$TESTABILITY" -lt 15 ] && echo "  - Testability: only $AC_WITH_VERIFY/$AC_COUNT ACs have verify commands. Add 'verify: {type, value}' to each AC."
+  [ "$NEG_SCORE" -lt 10 ] && echo "  - Negative coverage: no holdout scenarios and no 'must not / reject / prevent' ACs. Add at least one negative test."
+  [ "$CLARITY" -lt 15 ] && echo "  - Clarity: goal is too short, too long, or contains vague phrases (works correctly, as expected)."
+  [ "$SCOPE_SCORE" -lt 8 ] && echo "  - Scope: $INSCOPE_COUNT files in scope (limit: 15 for medium risk) or missing outOfScope list."
+  [ "$COMPLETENESS" -lt 8 ] && echo "  - Completeness: requiredInputsProvided=$REQ_OK or openQuestions not empty."
+  [ "$BOUNDARY" -lt 5 ] && echo "  - Boundary system: missing outOfScope list or assumptions."
+  echo ""
+  echo "Re-run the Contractor agent with this feedback to improve the contract."
+  exit 1
+fi
+
+# Write score to .signum/ for display in Step 1.4
+jq -n --argjson total "$TOTAL" --arg grade "$GRADE" \
+  --argjson testability "$TESTABILITY" --argjson neg_score "$NEG_SCORE" \
+  --argjson clarity "$CLARITY" --argjson scope "$SCOPE_SCORE" \
+  --argjson completeness "$COMPLETENESS" --argjson boundary "$BOUNDARY" \
+  '{ total: $total, grade: $grade,
+     dimensions: { testability: $testability, negative_coverage: $neg_score,
+                   clarity: $clarity, scope_boundedness: $scope,
+                   completeness: $completeness, boundary_system: $boundary } }' \
+  > .signum/spec_quality.json
+```
+
 ### Step 1.4: Display contract summary
 
 Use the Bash tool to extract and display:
@@ -110,6 +209,10 @@ jq -r '"Goal: " + .goal,
        "Acceptance criteria: " + (.acceptanceCriteria | length | tostring) + " defined",
        "Holdout scenarios: " + ((.holdoutScenarios // []) | length | tostring) + " defined"' \
   .signum/contract.json
+
+QUALITY=$(jq -r '"Spec quality: " + (.total | tostring) + "/100 (grade " + .grade + ")"' \
+  .signum/spec_quality.json 2>/dev/null || echo "Spec quality: not computed")
+echo "$QUALITY"
 ```
 
 Also display any riskSignals if riskLevel is "high":
