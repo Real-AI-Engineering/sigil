@@ -47,6 +47,7 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch \
        .signum/contract-engineer.json .signum/contract-policy.json \
        .signum/policy_violations.json \
        .signum/spec_quality.json .signum/spec_validation.json \
+       .signum/repo_contract_baseline.json .signum/repo_contract_violations.json \
        .signum/reviews/claude.json .signum/reviews/codex.json .signum/reviews/gemini.json \
        .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
        .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt
@@ -498,6 +499,33 @@ jq -n \
 echo "Baseline captured: lint=$BL_LINT_EXIT type=$BL_TYPE_EXIT test=$BL_TEST_EXIT"
 ```
 
+If `repo-contract.json` exists in the project root, also capture invariant baseline:
+
+```bash
+if [ -f "repo-contract.json" ]; then
+  python3 -c "
+import json, subprocess
+with open('repo-contract.json') as f:
+    rc = json.load(f)
+results = {}
+for inv in rc.get('invariants', []):
+    r = subprocess.run(inv['verify'], shell=True, capture_output=True, text=True)
+    results[inv['id']] = {
+        'description': inv['description'],
+        'severity': inv['severity'],
+        'verify': inv['verify'],
+        'exit_code': r.returncode,
+        'passed': r.returncode == 0,
+    }
+with open('.signum/repo_contract_baseline.json', 'w') as f:
+    json.dump(results, f, indent=2)
+total = len(results)
+passed = sum(1 for v in results.values() if v['passed'])
+print(f'Repo-contract baseline: {passed}/{total} invariants passing')
+"
+fi
+```
+
 ### Step 2.1: Launch Engineer
 
 Use the Agent tool to launch the "engineer" agent with this prompt:
@@ -626,6 +654,54 @@ If output contains `AUTO_BLOCK`, **STOP**. Do not proceed to Phase 3.
 ## Phase 3: AUDIT
 
 **Goal:** Verify the change from multiple independent angles.
+
+### Step 3.0.5: Repo-contract invariant check
+
+If `repo-contract.json` and `.signum/repo_contract_baseline.json` both exist, re-run invariants and detect regressions:
+
+```bash
+if [ -f "repo-contract.json" ] && [ -f ".signum/repo_contract_baseline.json" ]; then
+  python3 -c "
+import json, subprocess
+with open('repo-contract.json') as f:
+    rc = json.load(f)
+with open('.signum/repo_contract_baseline.json') as f:
+    baseline = json.load(f)
+regressions = []
+results = {}
+for inv in rc.get('invariants', []):
+    iid = inv['id']
+    r = subprocess.run(inv['verify'], shell=True, capture_output=True, text=True)
+    now_passed = r.returncode == 0
+    was_passing = baseline.get(iid, {}).get('passed', True)
+    regressed = was_passing and not now_passed
+    results[iid] = {
+        'description': inv['description'],
+        'severity': inv['severity'],
+        'verify': inv['verify'],
+        'exit_code': r.returncode,
+        'passed': now_passed,
+        'was_passing': was_passing,
+        'regressed': regressed,
+    }
+    if regressed:
+        regressions.append(f'{iid} ({inv[\"severity\"]}): {inv[\"description\"]}')
+with open('.signum/repo_contract_violations.json', 'w') as f:
+    json.dump({'invariants': results, 'regressions': regressions}, f, indent=2)
+if regressions:
+    print('INVARIANT REGRESSIONS:')
+    for reg in regressions:
+        print(f'  - {reg}')
+    print('AUTO_BLOCK')
+else:
+    total = len(results)
+    passed = sum(1 for v in results.values() if v['passed'])
+    print(f'Repo-contract: PASS ({passed}/{total} invariants holding)')
+"
+fi
+```
+
+If output contains `AUTO_BLOCK`, **STOP**. Invariant regressions are critical failures regardless of task-level AC results. Do not proceed to Step 3.1.
 
 ### Step 3.1: Mechanic (bash, zero LLM)
 
