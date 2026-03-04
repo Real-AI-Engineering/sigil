@@ -75,18 +75,22 @@ The synthesizer also computes a confidence score (0-100) based on execution heal
 
 ### Phase 4: PACK
 
-Assembles `proofpack.json` with SHA-256 checksums and confidence score:
+Embeds all artifacts into a single self-contained `proofpack.json`. Each artifact is wrapped in an envelope with SHA-256 checksum and size:
 
 ```json
 {
-  "schemaVersion": "3.0",
-  "runId": "signum-2026-03-03-abc123",
+  "schemaVersion": "4.0",
+  "runId": "signum-2026-03-04-abc123",
   "decision": "AUTO_OK",
   "confidence": { "overall": 92 },
-  "checksums": { ... },
+  "contract": { "content": {...}, "sha256": "...", "sizeBytes": 1234, "status": "present", "fullSha256": "..." },
+  "diff": { "content": "...", "sha256": "...", "sizeBytes": 5678, "status": "present" },
+  "checks": { "mechanic": {...}, "reviews": { "claude": {...} }, "auditSummary": {...} },
   "summary": "..."
 }
 ```
+
+Holdout scenarios are redacted from the embedded contract (`fullSha256` preserves the original hash). Patches larger than 100 KiB are omitted but hashed (`status: "omitted"`).
 
 AUTO_OK and HUMAN_REVIEW proofpacks are CI-gate artifacts. AUTO_BLOCK proofpacks halt the workflow.
 
@@ -159,4 +163,4 @@ No telemetry. No analytics. No phone-home.
 - **Heuristic risk**: Risk level is computed from file count and keyword patterns, not semantic analysis. It can under-estimate novel refactors.
 - **Interactive only**: Runs inside Claude Code sessions. Not suitable for unattended CI pipelines.
 - **Finding validation**: Catches hallucinated file paths and line ranges, but cannot verify logical correctness of a finding's claim.
-- **Single execution path**: v3 runs one implementation strategy. Multi-path execution (parallel strategies with winner selection) is planned for v3.1.
+- **Single execution path**: v4 runs one implementation strategy. Multi-path execution (parallel strategies with winner selection) is planned for v4.1.

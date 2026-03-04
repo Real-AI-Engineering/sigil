@@ -5,7 +5,7 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-3.0.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.0.0-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
 
 ```bash
@@ -24,7 +24,7 @@ AI can generate a function in seconds; telling you whether it is correct takes l
 | **CONTRACT** | Spec graded A–F. Low-quality specs blocked before implementation starts. Codex + Gemini validate the spec for gaps — before code is written, not after. |
 | **EXECUTE** | Engineer implements against `contract-engineer.json` — the contract with holdout scenarios physically removed. It cannot see what it will be tested against. |
 | **AUDIT** | Mechanic runs deterministic checks (zero LLM). Claude, Codex, and Gemini review the diff independently in parallel. Holdout scenarios run against the result. |
-| **PACK** | Contract hash, base commit, audit results, and verdict assembled into `proofpack.json` — a tamper-evident artifact CI can gate on. |
+| **PACK** | All artifacts embedded into a single self-contained `proofpack.json` — a tamper-evident bundle with SHA-256 checksums that CI can gate on. |
 
 ## Install
 
@@ -128,7 +128,7 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 ┌─────────────────────────────────────────────────────────┐
 │  PHASE 4: PACK                                          │
 │                                                         │
-│  checksums + auditChain → proofpack.json                │
+│  all artifacts embedded → self-contained proofpack.json  │
 └─────────────────────────────────────────────────────────┘
 ```
 
