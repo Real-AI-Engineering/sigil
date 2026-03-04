@@ -1117,10 +1117,11 @@ CONTRACT_SHA256=$(hash_file "$REDACTED_CONTRACT")
 CONTRACT_FULL_SHA256=$(hash_file .signum/contract.json)
 
 # Envelope builder: embeds file content if <=102400 bytes, else omits
+# JSON files (.json) are embedded as objects, text files as strings
 build_envelope() {
   local path="$1"
   if [ ! -f "$path" ]; then
-    echo '{"content":null,"sha256":"missing","sizeBytes":0,"status":"error","omitReason":"file not found"}'
+    echo '{"content":null,"sha256":null,"sizeBytes":0,"status":"error","omitReason":"file not found"}'
     return
   fi
   local sha
@@ -1129,7 +1130,11 @@ build_envelope() {
   size=$(file_size "$path")
   if [ "$size" -le 102400 ]; then
     local content
-    content=$(jq -Rs . < "$path")
+    if [[ "$path" == *.json ]]; then
+      content=$(cat "$path")
+    else
+      content=$(jq -Rs . < "$path")
+    fi
     printf '{"content":%s,"sha256":"%s","sizeBytes":%s,"status":"present"}' \
       "$content" "$sha" "$size"
   else
@@ -1141,7 +1146,7 @@ build_envelope() {
 # Contract envelope (special: has both sha256 of redacted and fullSha256 of original)
 CONTRACT_SIZE=$(file_size "$REDACTED_CONTRACT")
 if [ "$CONTRACT_SIZE" -le 102400 ]; then
-  CONTRACT_CONTENT=$(jq -Rs . < "$REDACTED_CONTRACT")
+  CONTRACT_CONTENT=$(cat "$REDACTED_CONTRACT")
   CONTRACT_ENV=$(printf '{"content":%s,"sha256":"%s","fullSha256":"%s","sizeBytes":%s,"status":"present"}' \
     "$CONTRACT_CONTENT" "$CONTRACT_SHA256" "$CONTRACT_FULL_SHA256" "$CONTRACT_SIZE")
 else
