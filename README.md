@@ -21,10 +21,10 @@ AI can generate a function in seconds; telling you whether it is correct takes l
 
 | Phase | What happens |
 |-------|-------------|
-| **CONTRACT** | Spec graded A–F. Low-quality specs blocked before implementation starts. Codex + Gemini validate the spec for gaps — before code is written, not after. |
-| **EXECUTE** | Engineer implements against `contract-engineer.json` — the contract with holdout scenarios physically removed. It cannot see what it will be tested against. |
-| **AUDIT** | Mechanic runs deterministic checks (zero LLM). Claude, Codex, and Gemini review the diff independently in parallel. Holdout scenarios run against the result. |
-| **PACK** | All artifacts embedded into a single self-contained `proofpack.json` — a tamper-evident bundle with SHA-256 checksums that CI can gate on. |
+| **CONTRACT** | Spec graded A–F. Codex + Gemini validate for gaps. |
+| **EXECUTE** | Engineer builds against a redacted contract. |
+| **AUDIT** | Deterministic checks + 3-model parallel review. |
+| **PACK** | Self-contained `proofpack.json` for CI gating. |
 
 ## Install
 
