@@ -27,6 +27,86 @@ touch .gitignore
 grep -q '^\.signum/$' .gitignore || echo '.signum/' >> .gitignore
 ```
 
+### Model Configuration
+
+Resolve external CLI model overrides from `~/.claude/emporium-providers.local.md`.
+This file uses YAML frontmatter to configure models for codex and gemini invocations.
+
+Use the Bash tool to define the `_resolve_model` helper and resolve models for this session:
+
+```bash
+_resolve_model() {
+  local task="$1" provider="$2"
+  local config="$HOME/.claude/emporium-providers.local.md"
+  [ -f "$config" ] || return 0
+  python3 -c "
+import sys, re, os
+
+config_path = os.path.expanduser('~/.claude/emporium-providers.local.md')
+try:
+    with open(config_path) as f:
+        text = f.read()
+except Exception:
+    sys.exit(0)
+
+# Extract YAML frontmatter
+m = re.match(r'^---\s*\n(.*?)\n---', text, re.DOTALL)
+if not m:
+    sys.exit(0)
+fm = m.group(1)
+
+# Minimal YAML parser (stdlib only, no PyYAML dependency)
+def parse_yaml_flat(lines):
+    \"\"\"Parse simple nested YAML into dot-separated key dict.\"\"\"
+    result = {}
+    stack = []  # (indent_level, key_prefix)
+    for line in lines:
+        stripped = line.rstrip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        # pop stack to find parent
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        prefix = stack[-1][1] + '.' if stack else ''
+        if ':' in stripped:
+            key, _, val = stripped.partition(':')
+            key = key.strip()
+            val = val.strip().strip('\"').strip(\"'\")
+            full_key = prefix + key
+            if val:
+                result[full_key] = val
+            stack.append((indent, full_key))
+    return result
+
+data = parse_yaml_flat(fm.split('\n'))
+
+task = '$task'
+provider = '$provider'
+
+# Resolution order: routing.task.provider -> routing.default.provider -> defaults.provider.model
+model = ''
+for lookup in [f'routing.{task}.{provider}', f'routing.default.{provider}', f'defaults.{provider}.model']:
+    if lookup in data:
+        model = data[lookup]
+        break
+
+# Validate model name
+if model and not re.match(r'^[A-Za-z0-9._:-]+\$', model):
+    model = ''
+
+print(model)
+" 2>/dev/null
+}
+
+SIGNUM_CODEX_MODEL=$(_resolve_model "review" "codex")
+SIGNUM_GEMINI_MODEL=$(_resolve_model "review" "gemini")
+echo "codex_model=${SIGNUM_CODEX_MODEL:-(cli default)} gemini_model=${SIGNUM_GEMINI_MODEL:-(cli default)}"
+```
+
+Save `SIGNUM_CODEX_MODEL` and `SIGNUM_GEMINI_MODEL` for use in all subsequent codex/gemini invocations.
+If either is empty, do NOT pass `--model` — let the CLI use its built-in default.
+
 Record `PROJECT_ROOT` as the current working directory (output of `pwd`).
 
 Check for an existing contract:
@@ -252,7 +332,9 @@ Answer these questions concisely (3-5 bullet points each):
 
 Be specific and brief. Focus on gaps that would cause implementation mistakes."
 
-codex exec --ephemeral -C "$PWD" -p fast --output-last-message "$OUT" "$PROMPT" 2>"$ERR"
+CODEX_MODEL_FLAG=""
+[ -n "$SIGNUM_CODEX_MODEL" ] && CODEX_MODEL_FLAG="--model $SIGNUM_CODEX_MODEL"
+codex exec --ephemeral -C "$PWD" -p fast $CODEX_MODEL_FLAG --output-last-message "$OUT" "$PROMPT" 2>"$ERR"
 CODEX_SPEC_EXIT=$?
 CODEX_SPEC_OUT=$(cat "$OUT" 2>/dev/null || cat "$ERR" | head -c 1000)
 rm -f "$OUT" "$ERR"
@@ -278,7 +360,9 @@ Answer concisely (3-5 bullet points each):
 
 Be specific. Focus on what would cause bugs or user complaints if left unaddressed."
 
-RESP=$(gemini -p "$PROMPT" -o text 2>"$ERR")
+GEMINI_MODEL_FLAG=""
+[ -n "$SIGNUM_GEMINI_MODEL" ] && GEMINI_MODEL_FLAG="--model $SIGNUM_GEMINI_MODEL"
+RESP=$(gemini $GEMINI_MODEL_FLAG -p "$PROMPT" -o text 2>"$ERR")
 GEMINI_SPEC_EXIT=$?
 if [ $GEMINI_SPEC_EXIT -ne 0 ]; then
   GEMINI_SPEC_OUT="[gemini error: $(cat $ERR | head -c 200)]"
@@ -920,7 +1004,9 @@ If CODEX_AVAILABLE, launch codex using the Bash tool with **`run_in_background: 
 ```bash
 PROMPT=$(cat .signum/review_prompt_codex.txt)
 OUT=$(mktemp)
-codex exec --ephemeral -C "$PWD" -p fast --output-last-message "$OUT" "$PROMPT" \
+CODEX_MODEL_FLAG=""
+[ -n "$SIGNUM_CODEX_MODEL" ] && CODEX_MODEL_FLAG="--model $SIGNUM_CODEX_MODEL"
+codex exec --ephemeral -C "$PWD" -p fast $CODEX_MODEL_FLAG --output-last-message "$OUT" "$PROMPT" \
   > .signum/reviews/codex_stdout.txt 2>&1
 cp "$OUT" .signum/reviews/codex_raw.txt 2>/dev/null || \
   cp .signum/reviews/codex_stdout.txt .signum/reviews/codex_raw.txt
@@ -934,7 +1020,9 @@ If GEMINI_AVAILABLE, immediately (without waiting for codex) launch gemini using
 
 ```bash
 PROMPT=$(cat .signum/review_prompt_gemini.txt)
-gemini -p "$PROMPT" > .signum/reviews/gemini_raw.txt 2>&1
+GEMINI_MODEL_FLAG=""
+[ -n "$SIGNUM_GEMINI_MODEL" ] && GEMINI_MODEL_FLAG="--model $SIGNUM_GEMINI_MODEL"
+gemini $GEMINI_MODEL_FLAG -p "$PROMPT" > .signum/reviews/gemini_raw.txt 2>&1
 echo "GEMINI_DONE"
 ```
 
