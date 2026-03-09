@@ -36,12 +36,22 @@ Read these files:
    - All available reviewers verdict is "APPROVE"
    - No MAJOR or CRITICAL findings from any reviewer
    - At least 2 out of 3 reviewers successfully parsed (parseOk: true)
-   - Holdout report has no failures (if holdout_report.json exists, `failed` must be 0)
+   - Holdout report has no failures AND no errors (if holdout_report.json exists, `failed` must be 0 AND `errors` must be 0)
 
 3. **HUMAN_REVIEW** if:
-   - None of the above apply (disagreements, CONDITIONAL verdicts, MAJOR findings, parse failures, holdout failures)
+   - None of the above apply (disagreements, CONDITIONAL verdicts, MAJOR findings, parse failures, holdout failures or errors)
 
 Pre-existing failures (checks that failed in baseline AND still fail) no longer auto-block.
+
+### Holdout Report Details
+
+The holdout report (`holdout_report.json`) contains a `results[]` array with per-scenario outcomes:
+- `status: "PASS"` -- holdout scenario satisfied
+- `status: "FAIL"` -- holdout assertion failed (regression signal)
+- `status: "ERROR"` -- DSL validation failure (treat as regression, same as FAIL)
+
+When any holdout has FAIL or ERROR status, include the specific failure details in `reasoning`:
+list each failed/errored holdout ID, description, and error message from the `results[]` array.
 
 ### Handling Missing/Failed Reviews
 
@@ -82,7 +92,7 @@ Write `.signum/audit_summary.json`:
     "gemini": { "verdict": "...", "findings": [], "parseOk": false, "available": true }
   },
   "availableReviews": 2,
-  "holdout": { "total": 2, "passed": 2, "failed": 0 },
+  "holdout": { "total": 2, "passed": 2, "failed": 0, "errors": 0 },
   "consensus": "2/3 approve, 1 parse error",
   "decision": "HUMAN_REVIEW",
   "reasoning": "Only 2 of 3 reviews parsed successfully, cannot auto-approve",
