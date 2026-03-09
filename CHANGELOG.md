@@ -1,5 +1,27 @@
 # Changelog
 
+## v4.1.0 (2026-03-09)
+
+### Security
+- **BREAKING**: Replace `eval` in holdout verification with typed DSL runner
+- Zero shell execution in verification path — eliminates code injection risk
+- Exec whitelist: only `test`, `ls`, `wc`, `cat`, `jq` allowed
+
+### Added
+- Typed verification DSL with primitives: `http`, `exec`, `expect`, `capture`
+- `visibility` field on acceptance criteria (`visible` / `holdout`)
+- `holdoutManifest` for tamper detection of redacted holdouts
+- `trust: "local"` trust model declaration
+- Detailed holdout report with per-criterion results
+- DSL runner with validation + execution (`lib/dsl-runner.sh`)
+- Test suite for DSL runner
+
+### Changed
+- Contract schema bumped to v3.1 (backward compatible with v3.0)
+- Contractor agent generates DSL verify blocks instead of shell commands
+- Engineer contract strips holdout-visibility ACs (not just holdoutScenarios)
+- Synthesizer handles detailed holdout report format (results array, errors count)
+
 ## [4.0.0] - 2026-03-04
 
 ### Changed
