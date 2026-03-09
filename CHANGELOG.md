@@ -42,9 +42,6 @@
 - `signumVersion` and `createdAt` top-level fields
 - `baseline` and `executeLog` as first-class proofpack artifacts
 
-### Planned (v4.1)
-- Multi-path execution: parallel implementation strategies with winner selection via worktree isolation
-
 ## [3.0.0] - 2026-03-03
 
 ### Added

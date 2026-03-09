@@ -5,7 +5,7 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.0.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.1.0-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
 
 ```bash
@@ -65,7 +65,7 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 
 **Spec quality gate** — Before implementation starts, your spec is scored across six dimensions: Testability, Negative coverage, Clarity, Scope boundedness, Completeness, Boundary cases. Grade D (below 60) is a hard stop with specific feedback on what's missing. The gate runs on the specification, not the code.
 
-**Holdout scenarios** — The Contractor generates hidden acceptance criteria the Engineer never sees. When implementation is complete, holdouts run against the result — blind testing for cases the agent couldn't optimize for. Minimum counts enforced by risk level: 0 for low, 2 for medium, 5 for high.
+**Holdout scenarios** — The Contractor generates hidden acceptance criteria the Engineer never sees. When implementation is complete, holdouts run against the result — blind testing for cases the agent couldn't optimize for. Verification uses a typed DSL with `http`, `exec` (whitelisted binaries only), and `expect` primitives — no shell execution, no `eval`. Minimum counts enforced by risk level: 0 for low, 2 for medium, 5 for high.
 
 **Data-level blinding** — The Engineer reads `contract-engineer.json`, not `contract.json`. Holdout scenarios are physically removed from the file — not hidden by instruction. The agent cannot infer them from context or structure.
 
