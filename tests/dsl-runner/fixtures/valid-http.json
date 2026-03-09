@@ -1,0 +1,1 @@
+{"steps":[{"http":{"method":"GET","url":"localhost:8000/health"},"capture":"resp"},{"expect":{"json_path":"$.status","source":"resp","equals":"ok"}}],"timeout_ms":5000}
