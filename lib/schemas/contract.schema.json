@@ -198,6 +198,16 @@
         "hash": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "parentContractId": {
+      "type": "string",
+      "pattern": "^sig-.+",
+      "description": "ContractId of the parent contract (for follow-up work)"
+    },
+    "relatedContractIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^sig-.+" },
+      "description": "ContractIds of related parallel or dependent contracts"
     }
   }
 }

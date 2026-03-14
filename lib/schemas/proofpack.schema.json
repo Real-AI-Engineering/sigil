@@ -27,10 +27,11 @@
     }
   },
   "properties": {
-    "schemaVersion": { "type": "string", "const": "4.0" },
+    "schemaVersion": { "type": "string", "enum": ["4.0", "4.1"] },
     "signumVersion": { "type": "string" },
     "createdAt": { "type": "string", "format": "date-time" },
     "runId": { "type": "string", "pattern": "^signum-" },
+    "contractId": { "type": "string", "pattern": "^sig-.+", "description": "Links proofpack to its source contract" },
     "decision": { "type": "string", "enum": ["AUTO_OK", "AUTO_BLOCK", "HUMAN_REVIEW"] },
     "summary": { "type": "string" },
     "confidence": {
@@ -46,6 +47,33 @@
         "approvedAt": { "type": "string" },
         "baseCommit": { "type": "string" }
       }
+    },
+    "contractSource": {
+      "type": "string",
+      "enum": ["interactive", "file", "template"],
+      "description": "How the contract was provided: interactive (generated in session), file (pre-approved via SIGNUM_CONTRACT_PATH), template (from a reusable template)"
+    },
+    "ciContext": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string", "enum": ["github-actions", "gitlab-ci", "circleci", "local"] },
+        "runUrl": { "type": "string", "format": "uri" },
+        "prNumber": { "type": "integer" },
+        "triggerEvent": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "baselineComparison": {
+      "type": "object",
+      "properties": {
+        "previousRunId": { "type": "string" },
+        "previousDecision": { "type": "string", "enum": ["AUTO_OK", "AUTO_BLOCK", "HUMAN_REVIEW"] },
+        "previousConfidence": { "type": "number", "minimum": 0, "maximum": 100 },
+        "confidenceDelta": { "type": "number" },
+        "newFindings": { "type": "integer", "minimum": 0 },
+        "resolvedFindings": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
     },
     "contract": { "$ref": "#/definitions/contractEnvelope" },
     "diff": { "$ref": "#/definitions/envelope" },

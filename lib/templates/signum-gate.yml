@@ -1,0 +1,119 @@
+# Signum Gate — GitHub Actions workflow template
+# Runs Signum pipeline as a PR quality gate.
+#
+# Setup:
+#   1. Copy this file to .github/workflows/signum-gate.yml
+#   2. Add ANTHROPIC_API_KEY to repository secrets
+#   3. Create a contract.json and commit it (or generate per-PR)
+#   4. Enable branch protection rule requiring "signum-gate" to pass
+#
+# Exit codes: 0=AUTO_OK (merge), 1=AUTO_BLOCK (block), 78=HUMAN_REVIEW (manual)
+
+name: Signum Gate
+
+on:
+  pull_request:
+    branches: [main, staging]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  signum-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Claude CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Run Signum
+        id: signum
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SIGNUM_CONTRACT_PATH: ${{ github.workspace }}/contract.json
+          SIGNUM_PROJECT_ROOT: ${{ github.workspace }}
+          SIGNUM_MAX_TURNS: "30"
+        run: |
+          set +e
+          bash lib/signum-ci.sh
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          # Extract decision for PR comment
+          if [ -f .signum/proofpack.json ]; then
+            DECISION=$(jq -r '.decision' .signum/proofpack.json)
+            CONFIDENCE=$(jq -r '.confidence.overall // 0' .signum/proofpack.json)
+            RUN_ID=$(jq -r '.runId' .signum/proofpack.json)
+            echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
+            echo "confidence=$CONFIDENCE" >> "$GITHUB_OUTPUT"
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+          exit $EXIT_CODE
+
+      - name: Upload proofpack
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signum-proofpack-${{ steps.signum.outputs.run_id || 'unknown' }}
+          path: .signum/proofpack.json
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload full audit directory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signum-audit-${{ steps.signum.outputs.run_id || 'unknown' }}
+          path: .signum/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const decision = '${{ steps.signum.outputs.decision }}' || 'UNKNOWN';
+            const confidence = '${{ steps.signum.outputs.confidence }}' || '?';
+            const runId = '${{ steps.signum.outputs.run_id }}' || 'unknown';
+            const exitCode = '${{ steps.signum.outputs.exit_code }}' || '?';
+
+            const emoji = {
+              'AUTO_OK': ':white_check_mark:',
+              'AUTO_BLOCK': ':x:',
+              'HUMAN_REVIEW': ':eyes:'
+            }[decision] || ':question:';
+
+            const body = [
+              `## ${emoji} Signum: ${decision}`,
+              '',
+              `| Field | Value |`,
+              `|-------|-------|`,
+              `| Decision | **${decision}** |`,
+              `| Confidence | ${confidence}% |`,
+              `| Run ID | \`${runId}\` |`,
+              `| Exit code | ${exitCode} |`,
+              '',
+              `<details><summary>What do these mean?</summary>`,
+              '',
+              `- **AUTO_OK** — All checks passed, safe to merge`,
+              `- **AUTO_BLOCK** — Issues found, do not merge`,
+              `- **HUMAN_REVIEW** — Needs manual review before merging`,
+              `</details>`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

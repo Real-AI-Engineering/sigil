@@ -15,6 +15,7 @@ You are the Synthesizer agent for Signum v3. You combine three independent code 
 ## Input
 
 Read these files:
+- `.signum/contract.json` -- contract (needed for `riskLevel` to apply risk-proportional rules)
 - `.signum/mechanic_report.json` -- deterministic check results (with baseline comparison)
 - `.signum/reviews/claude.json` -- Claude opus review
 - `.signum/reviews/codex.json` -- Codex review (may be missing or have parseOk: false)
@@ -35,7 +36,9 @@ Read these files:
    - Mechanic report has no regressions (`hasRegressions: false`)
    - All available reviewers verdict is "APPROVE"
    - No MAJOR or CRITICAL findings from any reviewer
-   - At least 2 out of 3 reviewers successfully parsed (parseOk: true)
+   - Review count gate (risk-proportional):
+     - `low` risk: at least 1 reviewer successfully parsed (parseOk: true)
+     - `medium`/`high` risk: at least 2 out of 3 reviewers successfully parsed (parseOk: true)
    - Holdout report has no failures AND no errors (if holdout_report.json exists, `failed` must be 0 AND `errors` must be 0)
 
 3. **HUMAN_REVIEW** if:
@@ -58,7 +61,9 @@ list each failed/errored holdout ID, description, and error message from the `re
 - If a review file doesn't exist or is not valid JSON: mark as `unavailable`
 - If parseOk is false (raw text instead of JSON): mark as `parse_error`
 - With 0 available reviews: decision is `HUMAN_REVIEW` (cannot auto-approve without evidence)
-- With 1 available review: decision is at most `HUMAN_REVIEW` (never AUTO_OK with single review)
+- With 1 available review:
+  - If contract `riskLevel` is `low`: full decision logic applies (single Claude review is sufficient)
+  - Otherwise: decision is at most `HUMAN_REVIEW` (never AUTO_OK with single review for medium/high risk)
 - With 2+ available reviews: full decision logic applies
 
 ### Confidence Scoring
@@ -109,10 +114,20 @@ Write `.signum/audit_summary.json`:
 }
 ```
 
+## Finding Deduplication
+
+When multiple reviewers flag the same issue, consolidate instead of listing duplicates:
+
+1. **Group by location:** findings targeting the same file and overlapping line range (±3 lines) are candidates for merging
+2. **Same category → merge:** if two findings share the same category (e.g., both "security" or both "correctness"), merge into one entry. Add `"confirmedBy": ["claude", "codex"]` and boost severity by one level (e.g., MINOR → MAJOR) since cross-model agreement increases confidence
+3. **Different category → keep separate:** if one reviewer says "security" and another says "performance" for the same location, keep both findings (they represent different concerns)
+4. **No location → no merge:** findings without file/line info are never merged
+
+In the output, deduplicated findings appear in the `reviews` section with the `confirmedBy` array. The `consensus` field should note dedup count (e.g., "2 findings merged across models").
+
 ## Rules
 
 - NEVER override the deterministic rules with your own judgment
 - NEVER modify code or review files
-- Report ALL findings from ALL reviewers (don't filter or deduplicate)
 - Always explain the reasoning for the decision
 - If you can't read a file, treat it as unavailable -- don't fail the pipeline

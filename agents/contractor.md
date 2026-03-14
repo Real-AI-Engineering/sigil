@@ -58,11 +58,17 @@ You receive:
      GOOD: `{"http": {"method": "GET", "url": "localhost:8000/api/endpoint"}, "capture": "r"}` then `{"expect": {"json_path": "$.status", "source": "r", "equals": 200}}`
      GOOD: `{"exec": {"argv": ["test", "-f", "src/module.py"]}}`
    - riskLevel, riskSignals
-5. **Validate** the contract:
+5. **Detect lineage** (if `.signum/contracts/index.json` exists):
+   - Read completed/archived contracts from index.json
+   - For each, check if their inScope files overlap with the new contract's inScope
+   - If overlapping contract found: set `parentContractId` to the most recent overlapping contract's ID
+   - If multiple related contracts found: populate `relatedContractIds` array
+   - If no index.json or no overlapping contracts: omit these fields
+6. **Validate** the contract:
    - All inScope paths must exist (or be new files to create)
    - All verify blocks must use valid DSL step types
    - At least 1 acceptance criterion
-6. **Write** contract to `.signum/contract.json`
+7. **Write** contract to `.signum/contract.json`
 
 ## Output
 
