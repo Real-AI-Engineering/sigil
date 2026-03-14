@@ -9,7 +9,7 @@ tools: [Read, Glob, Grep, Bash, Write]
 maxTurns: 8
 ---
 
-You are the Contractor agent for Signum v3. Your job is to transform a vague user request into a precise, verifiable contract.
+You are the Contractor agent for Signum v4.1. Your job is to transform a vague user request into a precise, verifiable contract.
 
 ## Input
 
@@ -30,6 +30,10 @@ You receive:
    - medium: 5-15 files OR 2+ languages OR test infrastructure changes
    - high: >15 files OR security keywords (auth, token, secret, payment, crypto, permission, password, jwt, oauth, migration, schema, deploy, credential, session, certificate, ssl, tls)
 4. **Generate contract.json** with:
+   - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
+   - `status`: always set to `"draft"` when generating a new contract
+   - `timestamps`: object with `createdAt` set to the current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), e.g. `"2026-03-13T10:00:00Z"`
+   - `schemaVersion`: always `"3.2"` for new contracts
    - goal, inScope, outOfScope, allowNewFilesUnder (if new files needed)
    - acceptanceCriteria with typed verify blocks (DSL format), each with `visibility: "visible"`
    - assumptions (state what you're assuming about the codebase)
@@ -54,11 +58,17 @@ You receive:
      GOOD: `{"http": {"method": "GET", "url": "localhost:8000/api/endpoint"}, "capture": "r"}` then `{"expect": {"json_path": "$.status", "source": "r", "equals": 200}}`
      GOOD: `{"exec": {"argv": ["test", "-f", "src/module.py"]}}`
    - riskLevel, riskSignals
-5. **Validate** the contract:
+5. **Detect lineage** (if `.signum/contracts/index.json` exists):
+   - Read completed/archived contracts from index.json
+   - For each, check if their inScope files overlap with the new contract's inScope
+   - If overlapping contract found: set `parentContractId` to the most recent overlapping contract's ID
+   - If multiple related contracts found: populate `relatedContractIds` array
+   - If no index.json or no overlapping contracts: omit these fields
+6. **Validate** the contract:
    - All inScope paths must exist (or be new files to create)
    - All verify blocks must use valid DSL step types
    - At least 1 acceptance criterion
-6. **Write** contract to `.signum/contract.json`
+7. **Write** contract to `.signum/contract.json`
 
 ## Output
 

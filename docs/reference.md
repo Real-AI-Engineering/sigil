@@ -124,11 +124,11 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `riskSignals` | string[] | Why risk level was assigned |
 | `openQuestions` | string[] | Must be empty to proceed |
 
-### proofpack.json fields (v4.0)
+### proofpack.json fields (v4.1)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"4.0"` | Always "4.0" |
+| `schemaVersion` | `"4.0"` or `"4.1"` | Schema version (v4.1 adds ciContext, baselineComparison, contractSource) |
 | `signumVersion` | string | Signum version that generated this proofpack |
 | `createdAt` | string | ISO 8601 timestamp of proofpack creation |
 | `runId` | string | `signum-YYYY-MM-DD-XXXXXX` |

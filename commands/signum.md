@@ -7,7 +7,7 @@ arguments:
     required: true
 ---
 
-# Signum v3: Evidence-Driven Development Pipeline
+# Signum v4.1: Evidence-Driven Development Pipeline
 
 You are the Signum orchestrator. You drive a 4-phase evidence-driven pipeline:
 
@@ -17,14 +17,184 @@ CONTRACT → EXECUTE → AUDIT → PACK
 
 The user's task: `$ARGUMENTS`
 
+## Explain Mode
+
+If the user's task is exactly `explain` (case-insensitive), do NOT run the pipeline. Instead, output this JSON and stop:
+
+```json
+{
+  "name": "Signum",
+  "version": "4.1.0",
+  "pipeline": ["CONTRACT", "EXECUTE", "AUDIT", "PACK"],
+  "phases": {
+    "CONTRACT": {
+      "description": "Transform request into verifiable JSON contract",
+      "steps": ["contractor agent", "spec quality gate (7 dimensions)", "prose checks", "multi-model spec validation", "clover reconstruction test", "human approval"],
+      "duration": "~30s",
+      "approvals": 1
+    },
+    "EXECUTE": {
+      "description": "Implement code against contract with repair loop",
+      "steps": ["baseline capture", "engineer agent (max 3 attempts)", "scope gate", "policy compliance"],
+      "duration": "1-5 min",
+      "approvals": 0
+    },
+    "AUDIT": {
+      "description": "Multi-angle verification with regression detection",
+      "steps": ["mechanic (lint/typecheck/tests vs baseline)", "holdout validation", "Claude semantic review", "Codex security review", "Gemini performance review", "synthesizer consensus"],
+      "duration": "1-3 min (risk-proportional)",
+      "approvals": 0
+    },
+    "PACK": {
+      "description": "Bundle all artifacts into signed proofpack",
+      "steps": ["collect metadata", "embed artifacts with SHA-256 envelopes", "write proofpack.json"],
+      "duration": "~5s",
+      "approvals": 0
+    }
+  },
+  "decisions": ["AUTO_OK", "AUTO_BLOCK", "HUMAN_REVIEW"],
+  "riskLevels": {
+    "low": {"reviews": "Claude only", "holdouts": 0, "cost": "<$0.20", "duration": "<2 min"},
+    "medium": {"reviews": "Claude + externals", "holdouts": "≥2", "cost": "~$0.50", "duration": "3-5 min"},
+    "high": {"reviews": "Full 3-model panel", "holdouts": "≥5", "cost": "~$1.00", "duration": "5-10 min"}
+  },
+  "artifacts": [".signum/contract.json", ".signum/combined.patch", ".signum/proofpack.json", ".signum/audit_summary.json"]
+}
+```
+
+Do not proceed to Setup or any phase.
+
+## Archive Mode
+
+If the user's task starts with `archive` (case-insensitive), do NOT run the pipeline. Instead, archive a completed contract.
+
+If a contract ID is provided (e.g., `archive sig-20260314-a1b2`), extract it from the user input. Otherwise, the active contract will be used.
+
+Before running the Bash tool, parse the contract ID from the user's arguments (everything after `archive `). Pass it as `CONTRACT_ID_FROM_ARGS` environment variable. Use the Bash tool:
+
+```bash
+source lib/contract-dir.sh
+
+# CONTRACT_ID_FROM_ARGS is set by the orchestrator from user input (may be empty)
+CONTRACT_ID="${CONTRACT_ID_FROM_ARGS:-$(get_active_contract)}"
+if [ -z "$CONTRACT_ID" ]; then
+  echo "ERROR: No contract ID provided and no active contract found" >&2
+  exit 1
+fi
+
+DIR=$(contract_dir "$CONTRACT_ID")
+if [ ! -d "$DIR" ]; then
+  echo "ERROR: Contract directory not found: $DIR" >&2
+  exit 1
+fi
+
+# Create archive directory
+ARCHIVE_DIR=".signum/archive/${CONTRACT_ID}/"
+mkdir -p "$ARCHIVE_DIR"
+
+# Copy essential artifacts (contract + proofpack)
+cp "${DIR}contract.json" "$ARCHIVE_DIR" 2>/dev/null || true
+cp "${DIR}proofpack.json" "$ARCHIVE_DIR" 2>/dev/null || true
+cp "${DIR}approval.json" "$ARCHIVE_DIR" 2>/dev/null || true
+
+# Copy audit summary if present
+cp "${DIR}audit_summary.json" "$ARCHIVE_DIR" 2>/dev/null || true
+
+# Purge intermediate artifacts (reviews, baseline, holdout, execute_log, prompts)
+rm -rf "${DIR}reviews/" 2>/dev/null || true
+rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json" \
+      "${DIR}mechanic_report.json" "${DIR}combined.patch" \
+      "${DIR}contract-engineer.json" "${DIR}contract-policy.json" \
+      "${DIR}policy_violations.json" "${DIR}spec_quality.json" \
+      "${DIR}spec_validation.json" "${DIR}clover_report.json" \
+      "${DIR}contract-hash.txt" "${DIR}execution_context.json" \
+      "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" 2>/dev/null || true
+
+# Update status in index.json
+update_contract_status "$CONTRACT_ID" "archived"
+
+# Log transition with timestamp
+ARCHIVED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq --arg id "$CONTRACT_ID" --arg ts "$ARCHIVED_AT" \
+  '.contracts = [.contracts[] |
+    if .contractId == $id then . + {archivedAt: $ts} else . end]' \
+  .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+  && mv .signum/contracts/index.json.tmp .signum/contracts/index.json
+
+echo "Archived: $CONTRACT_ID → $ARCHIVE_DIR"
+echo "Kept: contract.json, proofpack.json, approval.json, audit_summary.json"
+echo "Purged: intermediates (reviews, baseline, patches, prompts)"
+```
+
+Do not proceed to Setup or any phase.
+
+## Close Mode
+
+If the user's task starts with `close` (case-insensitive), do NOT run the pipeline. Instead, mark a contract as closed (abandoned, no proofpack).
+
+If a contract ID is provided (e.g., `close sig-20260314-a1b2`), extract it from user input. Otherwise, the active contract will be used.
+
+Before running the Bash tool, parse the contract ID from the user's arguments (everything after `close `). Pass it as `CONTRACT_ID_FROM_ARGS` environment variable. Use the Bash tool:
+
+```bash
+source lib/contract-dir.sh
+
+# CONTRACT_ID_FROM_ARGS is set by the orchestrator from user input (may be empty)
+CONTRACT_ID="${CONTRACT_ID_FROM_ARGS:-$(get_active_contract)}"
+if [ -z "$CONTRACT_ID" ]; then
+  echo "ERROR: No contract ID provided and no active contract found" >&2
+  exit 1
+fi
+
+# Update status
+update_contract_status "$CONTRACT_ID" "closed"
+
+# Log transition
+CLOSED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq --arg id "$CONTRACT_ID" --arg ts "$CLOSED_AT" \
+  '.contracts = [.contracts[] |
+    if .contractId == $id then . + {closedAt: $ts} else . end]' \
+  .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+  && mv .signum/contracts/index.json.tmp .signum/contracts/index.json
+
+# Clear active contract if this was the active one
+ACTIVE=$(get_active_contract)
+if [ "$ACTIVE" = "$CONTRACT_ID" ]; then
+  jq '.activeContractId = null' .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+    && mv .signum/contracts/index.json.tmp .signum/contracts/index.json
+  echo "Cleared active contract (was $CONTRACT_ID)"
+fi
+
+echo "Closed: $CONTRACT_ID at $CLOSED_AT"
+echo "No proofpack generated. Contract directory preserved for reference."
+```
+
+Do not proceed to Setup or any phase.
+
 ## Setup
 
 Use the Bash tool to prepare the workspace:
 
 ```bash
-mkdir -p .signum/reviews
+mkdir -p .signum/reviews .signum/contracts
 touch .gitignore
 grep -q '^\.signum/$' .gitignore || echo '.signum/' >> .gitignore
+
+# Check external CLI availability
+CODEX_INSTALLED=$(which codex > /dev/null 2>&1 && echo "yes" || echo "no")
+GEMINI_INSTALLED=$(which gemini > /dev/null 2>&1 && echo "yes" || echo "no")
+EXTERNAL_COUNT=0
+[ "$CODEX_INSTALLED" = "yes" ] && EXTERNAL_COUNT=$((EXTERNAL_COUNT + 1))
+[ "$GEMINI_INSTALLED" = "yes" ] && EXTERNAL_COUNT=$((EXTERNAL_COUNT + 1))
+
+echo "External providers: codex=$CODEX_INSTALLED gemini=$GEMINI_INSTALLED ($EXTERNAL_COUNT/2)"
+if [ "$EXTERNAL_COUNT" -eq 0 ]; then
+  echo "NOTE: No external review CLIs installed. Single-model mode:"
+  echo "  - low risk:   AUTO_OK possible (Claude review sufficient)"
+  echo "  - medium risk: AUTO_OK possible (graceful degradation)"
+  echo "  - high risk:  AUTO_OK requires manual review (multi-model required)"
+  echo "  Install codex/gemini for full multi-model audit."
+fi
 ```
 
 ### Model Configuration
@@ -131,7 +301,8 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch \
        .signum/contract-hash.txt .signum/execution_context.json \
        .signum/reviews/claude.json .signum/reviews/codex.json .signum/reviews/gemini.json \
        .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
-       .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt
+       .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt \
+       .signum/clover_report.json .signum/approval.json
 ```
 
 ---
@@ -163,6 +334,36 @@ jq -e '.schemaVersion and .goal and .inScope and .acceptanceCriteria and .riskLe
 
 If the file is missing or INVALID, stop and report: "Contractor agent failed to produce a valid contract.json. Check agent output for errors."
 
+### Step 1.2.5: Initialize per-contract directory
+
+After contractor creates contract.json, extract the contractId and set up an isolated directory for this contract's artifacts.
+
+Use the Bash tool:
+
+```bash
+# Source the contract-dir module
+source lib/contract-dir.sh
+
+# Extract contractId from contract.json
+CONTRACT_ID=$(jq -r '.contractId' .signum/contract.json)
+if [ -z "$CONTRACT_ID" ] || [ "$CONTRACT_ID" = "null" ]; then
+  echo "ERROR: contractId not found in contract.json"
+  exit 1
+fi
+echo "contractId: $CONTRACT_ID"
+
+# Create per-contract directory with reviews/ subdirectory
+init_contract_dir "$CONTRACT_ID"
+
+# Copy contract.json to per-contract directory (original stays in .signum/ as working copy)
+CDIR=$(contract_dir "$CONTRACT_ID")
+cp .signum/contract.json "${CDIR}contract.json"
+echo "Archived contract.json to ${CDIR}contract.json"
+
+# Register contract in index.json
+register_contract "$CONTRACT_ID" "draft"
+```
+
 ### Step 1.3: Check for open questions
 
 Use the Bash tool:
@@ -186,7 +387,7 @@ Do not proceed to Phase 2 until the user provides answers to every open question
 
 ### Step 1.3.5: Spec quality check
 
-Use the Bash tool to score the contract on 6 dimensions. A score below 60 (grade D) means the contract is too vague for reliable autonomous execution.
+Use the Bash tool to score the contract on 7 dimensions. A score below 69 (grade D) means the contract is too vague for reliable autonomous execution.
 
 ```bash
 GOAL=$(jq -r '.goal' .signum/contract.json)
@@ -240,25 +441,78 @@ BOUNDARY=0
 [ "$HAS_OUTOFSCOPE" -eq 1 ] && BOUNDARY=$((BOUNDARY + 5))
 [ "$HAS_ASSUMPTIONS" -eq 1 ] && BOUNDARY=$((BOUNDARY + 5))
 
-TOTAL=$((TESTABILITY + COMPLETENESS + SCOPE_SCORE + NEG_SCORE + CLARITY + BOUNDARY))
+# NL Consistency (0-15): vague verb detection + terminology consistency + AC contradiction detection
 
-if [ "$TOTAL" -ge 90 ]; then GRADE="A"
-elif [ "$TOTAL" -ge 75 ]; then GRADE="B"
-elif [ "$TOTAL" -ge 60 ]; then GRADE="C"
+# Sub-check 1: Vague verb detection (0-5)
+# Synonym map for terminology consistency (endpoint/route, function/method, test/spec,
+#   error/exception, config/configuration/settings, user/client, file/document)
+ALL_AC_TEXT=$(jq -r '[.acceptanceCriteria[].description] | join(" ")' .signum/contract.json)
+VAGUE_VERBS_PATTERN="handle|process|manage|support|ensure|implement|perform|utilize|leverage|facilitate"
+VAGUE_VERBS_FOUND=$(echo "$ALL_AC_TEXT $GOAL" | grep -ciE "\b($VAGUE_VERBS_PATTERN)\b" 2>/dev/null || echo 0)
+if [ "$VAGUE_VERBS_FOUND" -eq 0 ]; then VAGUE_VERB_PTS=5; else VAGUE_VERB_PTS=0; fi
+
+# Sub-check 2: Terminology consistency (0-5)
+# Check for SYNONYM pairs that indicate inconsistent terminology
+# SYNONYM map: endpoint/route, function/method, test/spec, error/exception, config/configuration/settings, user/client, file/document
+SYNONYM_INCONSISTENT=0
+_check_synonyms() {
+  local text="$1"
+  local a="$2" b="$3"
+  local has_a has_b
+  has_a=$(echo "$text" | grep -ciw "$a" 2>/dev/null || echo 0)
+  has_b=$(echo "$text" | grep -ciw "$b" 2>/dev/null || echo 0)
+  if [ "$has_a" -gt 0 ] && [ "$has_b" -gt 0 ]; then echo 1; else echo 0; fi
+}
+_s() { _check_synonyms "$GOAL $ALL_AC_TEXT" "$1" "$2"; }
+r1=$(_s "endpoint" "route")
+r2=$(_s "function" "method")
+r3=$(_s "test" "spec")
+r4=$(_s "error" "exception")
+r5=$(_s "config" "configuration")
+r6=$(_s "config" "settings")
+r7=$(_s "user" "client")
+r8=$(_s "file" "document")
+SYNONYM_INCONSISTENT=$((r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8))
+if [ "$SYNONYM_INCONSISTENT" -eq 0 ]; then TERM_PTS=5; else TERM_PTS=0; fi
+
+# Sub-check 3: AC contradiction detection (0-5)
+# Check pairs of AC descriptions for negation contradictions (must X vs must not X, allow Y vs prevent Y)
+AC_TEXTS=$(jq -r '.acceptanceCriteria[].description' .signum/contract.json 2>/dev/null || echo "")
+CONTRADICTION_FOUND=0
+while IFS= read -r ac_line; do
+  pos=$(echo "$ac_line" | grep -oi "must [a-z]*\|allow [a-z]*\|enable [a-z]*" 2>/dev/null | grep -vi "must not" | head -5)
+  while IFS= read -r phrase; do
+    [ -z "$phrase" ] && continue
+    word=$(echo "$phrase" | awk '{print $2}')
+    neg_count=$(echo "$AC_TEXTS" | grep -ci "must not $word\|prevent $word\|disallow $word\|disable $word" 2>/dev/null || echo 0)
+    if [ "$neg_count" -gt 0 ]; then CONTRADICTION_FOUND=1; break; fi
+  done <<< "$pos"
+  [ "$CONTRADICTION_FOUND" -eq 1 ] && break
+done <<< "$AC_TEXTS"
+if [ "$CONTRADICTION_FOUND" -eq 0 ]; then CONTRADICTION_PTS=5; else CONTRADICTION_PTS=0; fi
+
+NL_CONSISTENCY=$((VAGUE_VERB_PTS + TERM_PTS + CONTRADICTION_PTS))
+
+TOTAL=$((TESTABILITY + COMPLETENESS + SCOPE_SCORE + NEG_SCORE + CLARITY + BOUNDARY + NL_CONSISTENCY))
+
+if [ "$TOTAL" -ge 103 ]; then GRADE="A"
+elif [ "$TOTAL" -ge 86 ]; then GRADE="B"
+elif [ "$TOTAL" -ge 69 ]; then GRADE="C"
 else GRADE="D"
 fi
 
-echo "Spec quality: $TOTAL/100 (grade $GRADE)"
+echo "Spec quality: $TOTAL/115 (grade $GRADE)"
 echo "  Testability:       $TESTABILITY/25 (ACs with verify: $AC_WITH_VERIFY/$AC_COUNT)"
 echo "  Negative coverage: $NEG_SCORE/20 (holdouts: $HAS_HOLDOUTS, negative ACs: $NEG_ACS)"
 echo "  Clarity:           $CLARITY/20 (goal length: $GOAL_LEN chars)"
 echo "  Scope boundedness: $SCOPE_SCORE/15 (files in scope: $INSCOPE_COUNT)"
 echo "  Completeness:      $COMPLETENESS/10"
 echo "  Boundary system:   $BOUNDARY/10"
+echo "  NL Consistency:    $NL_CONSISTENCY/15 (vague verbs: $VAGUE_VERB_PTS, terminology: $TERM_PTS, contradictions: $CONTRADICTION_PTS)"
 
 if [ "$GRADE" = "D" ]; then
   echo ""
-  echo "SPEC QUALITY GATE FAILED (grade D, score $TOTAL/100)"
+  echo "SPEC QUALITY GATE FAILED (grade D, score $TOTAL/115)"
   echo "Gaps:"
   [ "$TESTABILITY" -lt 15 ] && echo "  - Testability: only $AC_WITH_VERIFY/$AC_COUNT ACs have verify commands. Add 'verify: {type, value}' to each AC."
   [ "$NEG_SCORE" -lt 10 ] && echo "  - Negative coverage: no holdout scenarios and no 'must not / reject / prevent' ACs. Add at least one negative test."
@@ -266,6 +520,7 @@ if [ "$GRADE" = "D" ]; then
   [ "$SCOPE_SCORE" -lt 8 ] && echo "  - Scope: $INSCOPE_COUNT files in scope (limit: 15 for medium risk) or missing outOfScope list."
   [ "$COMPLETENESS" -lt 8 ] && echo "  - Completeness: requiredInputsProvided=$REQ_OK or openQuestions not empty."
   [ "$BOUNDARY" -lt 5 ] && echo "  - Boundary system: missing outOfScope list or assumptions."
+  [ "$NL_CONSISTENCY" -lt 10 ] && echo "  - nl_consistency < 10: use more consistent terminology or fix AC contradictions."
   echo ""
   echo "Re-run the Contractor agent with this feedback to improve the contract."
   exit 1
@@ -276,14 +531,39 @@ jq -n --argjson total "$TOTAL" --arg grade "$GRADE" \
   --argjson testability "$TESTABILITY" --argjson neg_score "$NEG_SCORE" \
   --argjson clarity "$CLARITY" --argjson scope "$SCOPE_SCORE" \
   --argjson completeness "$COMPLETENESS" --argjson boundary "$BOUNDARY" \
+  --argjson nl_consistency "$NL_CONSISTENCY" \
   '{ total: $total, grade: $grade,
      dimensions: { testability: $testability, negative_coverage: $neg_score,
                    clarity: $clarity, scope_boundedness: $scope,
-                   completeness: $completeness, boundary_system: $boundary } }' \
+                   completeness: $completeness, boundary_system: $boundary,
+                   nl_consistency: $nl_consistency } }' \
   > .signum/spec_quality.json
 ```
 
+#### Prose quality check (informational, non-blocking)
+
+Use the Bash tool to run the prose quality gate on the contract. This check is **informational only** — the pipeline continues regardless of findings.
+
+```bash
+PROSE_REPORT=""
+if [ -f lib/prose-check.sh ]; then
+  PROSE_REPORT=$(lib/prose-check.sh .signum/contract.json 2>/dev/null || echo '{}')
+  PROSE_TOTAL=$(echo "$PROSE_REPORT" | jq '.total_findings // 0')
+  PROSE_PASS=$(echo "$PROSE_REPORT" | jq -r '.pass // "true"')
+  echo "Prose quality: $PROSE_TOTAL finding(s), pass=$PROSE_PASS"
+
+  # Merge prose_warnings into spec_quality.json (non-blocking)
+  if [ -f .signum/spec_quality.json ]; then
+    jq --argjson prose "$PROSE_REPORT" '. + {prose_warnings: $prose}' \
+      .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+      && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+fi
+```
+
 ### Step 1.3.7: Multi-model spec validation (optional, if providers available)
+
+**Skip if `riskLevel` is `low`.** Low-risk tasks don't benefit from multi-model spec validation — proceed directly to Step 1.4.
 
 Use the Bash tool to check which providers are available:
 
@@ -393,6 +673,59 @@ jq -n \
 echo "Spec validation written to .signum/spec_validation.json"
 ```
 
+### Step 1.3.8: Clover reconstruction test
+
+Verify that the acceptance criteria fully capture the goal's intent. Ask a model to reconstruct the goal from ONLY the ACs, then compare with the original.
+
+Use the Agent tool to launch a general-purpose agent (model: sonnet) with this prompt:
+
+```
+You are given ONLY the acceptance criteria below. You have NOT seen the original goal.
+Reconstruct what the goal/task likely was based solely on these ACs.
+
+Acceptance criteria:
+<ACs from .signum/contract.json — list each AC id + description, but do NOT include the goal>
+
+Write your reconstructed goal as a single paragraph (2-3 sentences max).
+Then write a JSON object:
+{
+  "reconstructed_goal": "<your reconstruction>",
+  "coverage_gaps": ["<any aspects you could NOT infer from the ACs>"],
+  "confidence": <0.0-1.0 how confident you are the ACs fully describe the task>
+}
+Output ONLY the JSON object, no other text.
+```
+
+After the agent returns, use the Bash tool to compare:
+
+```bash
+ORIGINAL_GOAL=$(jq -r '.goal' .signum/contract.json)
+RECONSTRUCTED=$(echo '<agent output>' | jq -r '.reconstructed_goal // empty')
+CONFIDENCE=$(echo '<agent output>' | jq -r '.confidence // 0')
+GAPS=$(echo '<agent output>' | jq -r '.coverage_gaps | length')
+
+# Write clover report
+jq -n \
+  --arg original "$ORIGINAL_GOAL" \
+  --arg reconstructed "$RECONSTRUCTED" \
+  --argjson confidence "$CONFIDENCE" \
+  --argjson gap_count "$GAPS" \
+  --argjson gaps "$(echo '<agent output>' | jq '.coverage_gaps')" \
+  '{original_goal: $original, reconstructed_goal: $reconstructed,
+    confidence: $confidence, coverage_gaps: $gaps, gap_count: $gap_count,
+    pass: ($confidence >= 0.7 and $gap_count <= 2)}' > .signum/clover_report.json
+
+if [ "$(jq '.pass' .signum/clover_report.json)" = "false" ]; then
+  echo "CLOVER WARNING: ACs may not fully capture the goal (confidence=$CONFIDENCE, gaps=$GAPS)"
+  jq -r '.coverage_gaps[]' .signum/clover_report.json | sed 's/^/  - /'
+  echo "Consider adding ACs to cover the gaps above."
+else
+  echo "Clover test: PASS (confidence=$CONFIDENCE)"
+fi
+```
+
+Clover failure is informational — it does not block the pipeline. Display warnings in Step 1.4 if `pass` is false.
+
 ### Step 1.4: Display contract summary
 
 Use the Bash tool to extract and display:
@@ -405,7 +738,7 @@ jq -r '"Goal: " + .goal,
        "Holdout scenarios: " + ((.holdoutScenarios // []) | length | tostring) + " defined"' \
   .signum/contract.json
 
-QUALITY=$(jq -r '"Spec quality: " + (.total | tostring) + "/100 (grade " + .grade + ")"' \
+QUALITY=$(jq -r '"Spec quality: " + (.total | tostring) + "/115 (grade " + .grade + ")"' \
   .signum/spec_quality.json 2>/dev/null || echo "Spec quality: not computed")
 echo "$QUALITY"
 
@@ -424,6 +757,20 @@ if [ -f .signum/spec_validation.json ]; then
     jq -r '.gemini.findings' .signum/spec_validation.json
   fi
 fi
+
+# Show clover reconstruction test results if available
+if [ -f .signum/clover_report.json ]; then
+  CLOVER_PASS=$(jq -r '.pass' .signum/clover_report.json)
+  CLOVER_CONF=$(jq -r '.confidence' .signum/clover_report.json)
+  if [ "$CLOVER_PASS" = "true" ]; then
+    echo "Clover test: PASS (confidence=$CLOVER_CONF)"
+  else
+    echo ""
+    echo "--- Clover reconstruction WARNING ---"
+    echo "ACs may not fully capture the goal (confidence=$CLOVER_CONF)"
+    jq -r '.coverage_gaps[]' .signum/clover_report.json | sed 's/^/  - /'
+  fi
+fi
 ```
 
 Also display any riskSignals if riskLevel is "high":
@@ -433,9 +780,63 @@ jq -r 'if .riskLevel == "high" then "Risk signals: " + (.riskSignals // [] | joi
   .signum/contract.json
 ```
 
-**Ask the user to confirm before proceeding to Phase 2.** Display: "Contract ready. Proceed with implementation? (yes/no)"
+**Present the following 5-item approval checklist to the user.** Display it as a numbered list and ask for a yes/no answer for each item:
 
-Wait for confirmation. If the user says no, stop.
+```
+Human approval checklist — answer yes or no for each:
+
+1. Goal matches intent: Does the contract goal accurately reflect what you asked for?
+2. ACs sufficient: Are the acceptance criteria complete and testable?
+3. Scope correct: Is the inScope list appropriate (no missing or extra files)?
+4. Assumptions valid: Are the listed assumptions accurate for your project?
+5. Risk appropriate: Is the stated risk level correct for this change?
+```
+
+Wait for the user to answer all 5 items. Collect the responses.
+
+If ANY item is answered "no":
+
+Display which items failed, for example:
+```
+Approval REJECTED. Failed items:
+  - Item 2 (ACs sufficient): [user's reason]
+  - Item 4 (Assumptions valid): [user's reason]
+
+Re-run the contractor with this feedback to revise the contract.
+Phase 2 will NOT be entered until all checklist items are approved.
+```
+
+**STOP. Do not proceed to Phase 2.**
+
+If ALL items are answered "yes", write `.signum/approval.json`:
+
+```bash
+APPROVAL_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq -n --arg ts "$APPROVAL_TS" \
+  '{
+    approved: true,
+    approvedAt: $ts,
+    checklist: {
+      goal_matches_intent: true,
+      acs_sufficient: true,
+      scope_correct: true,
+      assumptions_valid: true,
+      risk_appropriate: true
+    }
+  }' > .signum/approval.json
+echo "approval.json written at $APPROVAL_TS"
+```
+
+After writing approval.json, transition the contract status from `draft` to `active` and record the `activatedAt` timestamp:
+
+```bash
+ACTIVATED_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq --arg ts "$ACTIVATED_TS" \
+  '.status = "active" | .timestamps.activatedAt = $ts' \
+  .signum/contract.json > .signum/contract-tmp.json && \
+  mv .signum/contract-tmp.json .signum/contract.json
+echo "Contract status: draft → active at $ACTIVATED_TS"
+```
 
 ### Step 1.4.5: Record approval timestamp (contract-hash.txt)
 
@@ -470,7 +871,7 @@ Use the Bash tool to create a contract stripped of holdout scenarios and holdout
 ```bash
 # Create engineer contract: remove holdouts + holdoutScenarios
 jq '{
-  schemaVersion, goal, inScope, allowNewFilesUnder, outOfScope,
+  schemaVersion, contractId, status, timestamps, goal, inScope, allowNewFilesUnder, outOfScope,
   acceptanceCriteria: [.acceptanceCriteria[] | select(.visibility != "holdout")],
   assumptions, openQuestions, riskLevel, riskSignals, requiredInputsProvided
 } | with_entries(select(.value != null))' .signum/contract.json > .signum/contract-engineer.json
@@ -492,7 +893,7 @@ After writing `contract-engineer.json`, validate holdout count against risk leve
 
 ```bash
 RISK=$(jq -r '.riskLevel' .signum/contract.json)
-HOLDOUT_COUNT=$(jq '(.holdoutScenarios // []) | length' .signum/contract.json)
+HOLDOUT_COUNT=$(jq '([.acceptanceCriteria[] | select(.visibility == "holdout")] | length) + ((.holdoutScenarios // []) | length)' .signum/contract.json)
 
 # Minimum holdout requirements by risk level
 MIN_HOLDOUTS=0
@@ -778,6 +1179,33 @@ If output contains `AUTO_BLOCK`, **STOP**. Do not proceed to Phase 3.
 
 **Goal:** Verify the change from multiple independent angles.
 
+### Risk-Proportional Ceremony
+
+Read the contract's `riskLevel` and apply the matching ceremony profile. Steps marked "skip" MUST be skipped entirely (no agent launches, no CLI calls).
+
+| Step | Low | Medium | High |
+|------|-----|--------|------|
+| 3.0.5 Repo-contract invariants | run | run | run |
+| 3.1 Mechanic | run | run | run |
+| 3.1.5 Holdout validation | skip (0 required) | run (≥2 required) | run (≥5 required) |
+| 3.2 Prepare review prompts | skip | run | run |
+| 3.2.5 Launch reviews | Claude only | Claude + available externals | Claude + Codex + Gemini (all 3) |
+| 3.3–3.3.5 Collect + parse | Claude only | all launched | all launched |
+| 3.5 Synthesizer | run | run | run |
+
+**Budget targets:** Low <2 min, <$0.20 | Medium 3-5 min | High 5-10 min, full panel.
+
+**Single-model graceful degradation:** If external CLIs are not installed (not failed — genuinely absent), the synthesizer allows AUTO_OK with single Claude review for low and medium risk. High risk always requires multi-model or HUMAN_REVIEW.
+
+Use the Bash tool to read the risk level and save it for conditional checks:
+
+```bash
+RISK_LEVEL=$(jq -r '.riskLevel' .signum/contract.json)
+echo "RISK_LEVEL=$RISK_LEVEL"
+```
+
+Save `RISK_LEVEL` for use in all subsequent steps.
+
 ### Step 3.0.5: Repo-contract invariant check
 
 If `repo-contract.json` and `.signum/repo_contract_baseline.json` both exist, re-run invariants and detect regressions:
@@ -911,9 +1339,15 @@ If any check has a NEW regression, continue to reviews — mechanic regression i
 
 ### Step 3.1.5: Holdout validation
 
-Run holdout verification using the typed DSL runner. Supports both new format (`acceptanceCriteria` with `visibility: "holdout"`) and legacy `holdoutScenarios`:
+**Skip if `RISK_LEVEL` is `low`.** Write an empty holdout report and proceed to Step 3.2.
+
+Otherwise, run holdout verification using the typed DSL runner. Supports both new format (`acceptanceCriteria` with `visibility: "holdout"`) and legacy `holdoutScenarios`:
 
 ```bash
+if [ "$RISK_LEVEL" = "low" ]; then
+  echo '{"total":0,"passed":0,"failed":0,"errors":0,"results":[]}' > .signum/holdout_report.json
+  echo "Holdout validation skipped (low risk)"
+else
 # Count holdouts: new format (visibility=holdout) + legacy (holdoutScenarios)
 HOLDOUT_ACS=$(jq '[.acceptanceCriteria[] | select(.visibility == "holdout")] | length' .signum/contract.json)
 LEGACY_HOLDOUTS=$(jq '.holdoutScenarios // [] | length' .signum/contract.json)
@@ -986,13 +1420,65 @@ else
   echo '{"total":0,"passed":0,"failed":0,"errors":0,"results":[]}' > .signum/holdout_report.json
   echo "No holdout scenarios"
 fi
+fi
 ```
 
 If any holdout fails, continue to reviews but synthesizer treats it as regression signal.
 
-### Step 3.2: Reviewer-Claude (agent)
+### Step 3.2: Prepare prompts for all reviewers
 
-Use the Agent tool to launch the "reviewer-claude" agent with this prompt:
+**If `RISK_LEVEL` is `low`:** skip this step entirely (no external prompts needed). Set `CODEX_AVAILABLE=false` and `GEMINI_AVAILABLE=false`, then proceed directly to Step 3.2.5 (Claude-only).
+
+Otherwise, in a single Bash block, check both codex and gemini availability, build both prompts (security-focused for codex, performance-focused for gemini), and save as `.signum/review_prompt_codex.txt` and `.signum/review_prompt_gemini.txt`:
+
+```bash
+which codex > /dev/null 2>&1 && CODEX_AVAILABLE=true || CODEX_AVAILABLE=false
+which gemini > /dev/null 2>&1 && GEMINI_AVAILABLE=true || GEMINI_AVAILABLE=false
+
+if [ "$CODEX_AVAILABLE" = "true" ]; then
+  python3 -c "
+import json, sys
+goal = json.load(open('.signum/contract.json'))['goal']
+diff = open('.signum/combined.patch').read()
+tmpl = open('lib/prompts/review-template-security.md').read()
+print(tmpl.replace('{goal}', goal).replace('{diff}', diff))
+" > .signum/review_prompt_codex.txt
+  echo "codex: AVAILABLE, prompt written"
+else
+  echo "codex: UNAVAILABLE"
+fi
+
+if [ "$GEMINI_AVAILABLE" = "true" ]; then
+  python3 -c "
+import json, sys
+goal = json.load(open('.signum/contract.json'))['goal']
+diff = open('.signum/combined.patch').read()
+tmpl = open('lib/prompts/review-template-performance.md').read()
+print(tmpl.replace('{goal}', goal).replace('{diff}', diff))
+" > .signum/review_prompt_gemini.txt
+  echo "gemini: AVAILABLE, prompt written"
+else
+  echo "gemini: UNAVAILABLE"
+fi
+
+echo "CODEX_AVAILABLE=$CODEX_AVAILABLE GEMINI_AVAILABLE=$GEMINI_AVAILABLE"
+```
+
+Save CODEX_AVAILABLE and GEMINI_AVAILABLE for use in the next step.
+
+### Step 3.2.5: Launch reviews
+
+**Fresh-reviewer rule:** If the Engineer used more than 1 attempt (check `totalAttempts` in `.signum/execute_log.json`), use `model: "sonnet"` for the Claude reviewer agent instead of the default opus. This ensures a fresh perspective on retry code rather than the same model re-reviewing similar output.
+
+**Risk-proportional launch:**
+- **Low risk:** Launch Claude reviewer ONLY (foreground, not background). Write UNAVAILABLE stubs for codex and gemini immediately. Skip to Step 3.3 (no TaskOutput wait needed since Claude ran foreground, but still verify claude.json output).
+- **Medium/High risk:** Use a single message with multiple tool use blocks to launch all available reviewers simultaneously. Do NOT wait between launches.
+
+For medium/high risk, launch the reviewer-claude Agent with `run_in_background: true`, the Codex Bash with `run_in_background: true`, and the Gemini Bash with `run_in_background: true` — all in the same message:
+
+**Claude (Agent tool, `run_in_background: true`):**
+
+If Engineer used >1 attempt, add `model: "sonnet"` to the Agent tool call.
 
 ```
 Read .signum/contract.json, .signum/combined.patch, and .signum/mechanic_report.json.
@@ -1000,64 +1486,7 @@ Follow lib/prompts/review-template.md and write your review to .signum/reviews/c
 Write ONLY the JSON object, no markers, no markdown.
 ```
 
-After it finishes, verify the output exists:
-
-```bash
-test -f .signum/reviews/claude.json && jq -e '.verdict' .signum/reviews/claude.json > /dev/null \
-  && echo "claude review OK" || echo "WARNING: claude.json missing or invalid"
-```
-
-### Step 3.3: Reviewer-Codex (CLI, security-focused)
-
-Use the Bash tool to check availability:
-
-```bash
-which codex > /dev/null 2>&1 && echo "AVAILABLE" || echo "UNAVAILABLE"
-```
-
-**If AVAILABLE:**
-
-Build the security-focused review prompt:
-
-```bash
-python3 -c "
-import json, sys
-goal = json.load(open('.signum/contract.json'))['goal']
-diff = open('.signum/combined.patch').read()
-tmpl = open('lib/prompts/review-template-security.md').read()
-print(tmpl.replace('{goal}', goal).replace('{diff}', diff))
-" > .signum/review_prompt_codex.txt
-```
-
-Save the availability result as CODEX_AVAILABLE. Codex will be launched in parallel in Step 3.4.5.
-
-### Step 3.4: Reviewer-Gemini (CLI, performance-focused)
-
-Use the Bash tool to check availability:
-
-```bash
-which gemini > /dev/null 2>&1 && echo "AVAILABLE" || echo "UNAVAILABLE"
-```
-
-**If AVAILABLE:**
-
-Build the performance-focused review prompt:
-
-```bash
-python3 -c "
-import json, sys
-goal = json.load(open('.signum/contract.json'))['goal']
-diff = open('.signum/combined.patch').read()
-tmpl = open('lib/prompts/review-template-performance.md').read()
-print(tmpl.replace('{goal}', goal).replace('{diff}', diff))
-" > .signum/review_prompt_gemini.txt
-```
-
-Save the availability result as GEMINI_AVAILABLE. Gemini will be launched in parallel in Step 3.4.5.
-
-### Step 3.4.5: Launch Codex and Gemini in parallel
-
-If CODEX_AVAILABLE, launch codex using the Bash tool with **`run_in_background: true`**:
+**Codex (Bash tool, `run_in_background: true`, only if CODEX_AVAILABLE):**
 
 ```bash
 PROMPT=$(cat .signum/review_prompt_codex.txt)
@@ -1072,9 +1501,7 @@ rm -f "$OUT"
 echo "CODEX_DONE"
 ```
 
-Save the resulting background task ID as CODEX_TASK_ID. Do NOT wait for it.
-
-If GEMINI_AVAILABLE, immediately (without waiting for codex) launch gemini using the Bash tool with **`run_in_background: true`**:
+**Gemini (Bash tool, `run_in_background: true`, only if GEMINI_AVAILABLE):**
 
 ```bash
 PROMPT=$(cat .signum/review_prompt_gemini.txt)
@@ -1084,11 +1511,22 @@ gemini $GEMINI_MODEL_FLAG -p "$PROMPT" > .signum/reviews/gemini_raw.txt 2>&1
 echo "GEMINI_DONE"
 ```
 
-Save the resulting background task ID as GEMINI_TASK_ID. Do NOT wait for it.
+Save the background task IDs: CLAUDE_TASK_ID, CODEX_TASK_ID, GEMINI_TASK_ID. Do NOT wait for any of them before launching the others. Then proceed to Step 3.3 below.
 
-Now collect results. Use the TaskOutput tool with `block: true` to wait for CODEX_TASK_ID (if codex was launched). Then use the TaskOutput tool with `block: true` to wait for GEMINI_TASK_ID (if gemini was launched).
+### Step 3.3: Collect all 3 results
 
-After both complete (or if they were never launched), parse codex output:
+Use the TaskOutput tool with `block: true` to wait for CLAUDE_TASK_ID. Then use the TaskOutput tool with `block: true` to wait for CODEX_TASK_ID (if codex was launched). Then use the TaskOutput tool with `block: true` to wait for GEMINI_TASK_ID (if gemini was launched).
+
+After all complete (or if they were never launched), verify the claude output:
+
+```bash
+test -f .signum/reviews/claude.json && jq -e '.verdict' .signum/reviews/claude.json > /dev/null \
+  && echo "claude review OK" || echo "WARNING: claude.json missing or invalid"
+```
+
+### Step 3.3.5: Parse codex and gemini outputs
+
+After collection, parse codex output and parse gemini output.
 
 If CODEX_AVAILABLE: attempt 3-level parsing of `.signum/reviews/codex_raw.txt`:
 
@@ -1129,8 +1567,6 @@ If CODEX_UNAVAILABLE:
 echo '{"verdict":"UNAVAILABLE","findings":[],"summary":"Codex CLI not installed","available":false}' \
   > .signum/reviews/codex.json
 ```
-
-Parse gemini output:
 
 If GEMINI_AVAILABLE: attempt 3-level parsing of `.signum/reviews/gemini_raw.txt`:
 
@@ -1205,7 +1641,20 @@ jq -r '"=== AUDIT SUMMARY ===",
 
 ## Phase 4: PACK
 
-**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.0) with embedded artifact contents.
+**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.1) with embedded artifact contents.
+
+### Step 4.0: Transition contract status to completed
+
+Transition the contract status from `active` to `completed` and record the `completedAt` timestamp:
+
+```bash
+COMPLETED_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq --arg ts "$COMPLETED_TS" \
+  '.status = "completed" | .timestamps.completedAt = $ts' \
+  .signum/contract.json > .signum/contract-tmp.json && \
+  mv .signum/contract-tmp.json .signum/contract.json
+echo "Contract status: active → completed at $COMPLETED_TS"
+```
 
 ### Step 4.1: Collect metadata and build proofpack
 
@@ -1316,6 +1765,9 @@ HOLDOUT_ENV=$(build_envelope .signum/holdout_report.json)
 # Audit summary envelope
 AUDIT_ENV=$(build_envelope .signum/audit_summary.json)
 
+# Approval envelope
+APPROVAL_ENV=$(build_envelope .signum/approval.json)
+
 # Dynamic reviews: enumerate .signum/reviews/*.json
 REVIEWS_JSON='{'
 first=1
@@ -1332,12 +1784,56 @@ for review_file in .signum/reviews/*.json; do
 done
 REVIEWS_JSON="${REVIEWS_JSON}}"
 
+# Detect contract source
+if [ -n "${SIGNUM_CONTRACT_PATH:-}" ]; then
+  CONTRACT_SOURCE="file"
+else
+  CONTRACT_SOURCE="interactive"
+fi
+
+# Detect CI context
+CI_CONTEXT="null"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  CI_PROVIDER="github-actions"
+  CI_RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}"
+  CI_PR_NUMBER=$(jq -r '.pull_request.number // empty' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null || true)
+  CI_TRIGGER="${GITHUB_EVENT_NAME:-unknown}"
+  CI_CONTEXT=$(jq -n \
+    --arg provider "$CI_PROVIDER" \
+    --arg runUrl "$CI_RUN_URL" \
+    --arg trigger "$CI_TRIGGER" \
+    '{provider: $provider, runUrl: $runUrl, triggerEvent: $trigger}')
+  [ -n "$CI_PR_NUMBER" ] && CI_CONTEXT=$(echo "$CI_CONTEXT" | jq --argjson pr "$CI_PR_NUMBER" '. + {prNumber: $pr}')
+fi
+
+# Baseline comparison: find previous proofpack if exists
+BASELINE_COMP="null"
+PREV_PROOFPACK=$(ls -t .signum/contracts/*/proofpack.json 2>/dev/null | head -1 || true)
+if [ -n "$PREV_PROOFPACK" ] && [ -f "$PREV_PROOFPACK" ]; then
+  PREV_RUN_ID=$(jq -r '.runId // empty' "$PREV_PROOFPACK" 2>/dev/null || true)
+  PREV_DECISION=$(jq -r '.decision // empty' "$PREV_PROOFPACK" 2>/dev/null || true)
+  PREV_CONFIDENCE=$(jq -r '.confidence.overall // 0' "$PREV_PROOFPACK" 2>/dev/null || echo 0)
+  CONF_DELTA=$(echo "$CONFIDENCE - $PREV_CONFIDENCE" | bc 2>/dev/null || echo 0)
+  if [ -n "$PREV_RUN_ID" ]; then
+    BASELINE_COMP=$(jq -n \
+      --arg prevId "$PREV_RUN_ID" \
+      --arg prevDec "$PREV_DECISION" \
+      --argjson prevConf "$PREV_CONFIDENCE" \
+      --argjson delta "$CONF_DELTA" \
+      '{previousRunId: $prevId, previousDecision: $prevDec, previousConfidence: $prevConf, confidenceDelta: $delta}')
+  fi
+fi
+
+# Extract contractId for lineage
+PACK_CONTRACT_ID=$(jq -r '.contractId // empty' .signum/contract.json)
+
 # Final assembly
 jq -n \
-  --arg schemaVersion "4.0" \
-  --arg signumVersion "4.0.0" \
+  --arg schemaVersion "4.1" \
+  --arg signumVersion "4.1.0" \
   --arg createdAt "$RUN_DATE" \
   --arg runId "$RUN_ID" \
+  --arg contractId "$PACK_CONTRACT_ID" \
   --arg decision "$DECISION" \
   --arg summary "Goal: $GOAL | Risk: $RISK | Attempts: $ATTEMPTS | Mechanic: $MECHANIC | Confidence: ${CONFIDENCE}% | Decision: $DECISION" \
   --argjson confidence "$CONFIDENCE" \
@@ -1351,15 +1847,21 @@ jq -n \
   --argjson mechanicEnv "$MECHANIC_ENV" \
   --argjson holdoutEnv "$HOLDOUT_ENV" \
   --argjson auditEnv "$AUDIT_ENV" \
+  --argjson approvalEnv "$APPROVAL_ENV" \
   --argjson reviewsEnv "$REVIEWS_JSON" \
+  --arg contractSource "$CONTRACT_SOURCE" \
+  --argjson ciContext "$CI_CONTEXT" \
+  --argjson baselineComp "$BASELINE_COMP" \
   '{
     schemaVersion: $schemaVersion,
     signumVersion: $signumVersion,
     createdAt: $createdAt,
     runId: $runId,
+    contractId: (if $contractId != "" then $contractId else null end),
     decision: $decision,
     summary: $summary,
     confidence: { overall: $confidence },
+    contractSource: $contractSource,
     auditChain: {
       contractSha256: $contractHash,
       approvedAt: $approvedAt,
@@ -1369,18 +1871,41 @@ jq -n \
     diff: $diffEnv,
     baseline: $baselineEnv,
     executeLog: $executeEnv,
+    approval: $approvalEnv,
     checks: {
       mechanic: $mechanicEnv,
       holdout: $holdoutEnv,
       reviews: $reviewsEnv,
       auditSummary: $auditEnv
     }
-  }' > .signum/proofpack.json
+  }
+  | if $ciContext != null then . + {ciContext: $ciContext} else . end
+  | if $baselineComp != null then . + {baselineComparison: $baselineComp} else . end
+  ' > .signum/proofpack.json
 
 # Cleanup temp files
 rm -f "$REDACTED_CONTRACT"
 
-echo "Proofpack written: $RUN_ID (schema v4.0)"
+echo "Proofpack written: $RUN_ID (schema v4.1)"
+```
+
+### Step 4.2: Update contract status
+
+Use the Bash tool to transition the contract to `completed`:
+
+```bash
+if [ -f lib/contract-dir.sh ]; then
+  source lib/contract-dir.sh
+  CONTRACT_ID=$(jq -r '.contractId // empty' .signum/contract.json)
+  if [ -n "$CONTRACT_ID" ]; then
+    update_contract_status "$CONTRACT_ID" "completed"
+    # Sync updated contract.json + proofpack to per-contract directory
+    DIR=$(contract_dir "$CONTRACT_ID")
+    cp .signum/contract.json "${DIR}" 2>/dev/null || true
+    cp .signum/proofpack.json "${DIR}" 2>/dev/null || true
+    echo "Contract $CONTRACT_ID → completed"
+  fi
+fi
 ```
 
 ---
