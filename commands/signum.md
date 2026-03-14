@@ -510,11 +510,54 @@ jq -r 'if .riskLevel == "high" then "Risk signals: " + (.riskSignals // [] | joi
   .signum/contract.json
 ```
 
-**Ask the user to confirm before proceeding to Phase 2.** Display: "Contract ready. Proceed with implementation? (yes/no)"
+**Present the following 5-item approval checklist to the user.** Display it as a numbered list and ask for a yes/no answer for each item:
 
-Wait for confirmation. If the user says no, stop.
+```
+Human approval checklist — answer yes or no for each:
 
-After the user confirms, transition the contract status from `draft` to `active` and record the `activatedAt` timestamp:
+1. Goal matches intent: Does the contract goal accurately reflect what you asked for?
+2. ACs sufficient: Are the acceptance criteria complete and testable?
+3. Scope correct: Is the inScope list appropriate (no missing or extra files)?
+4. Assumptions valid: Are the listed assumptions accurate for your project?
+5. Risk appropriate: Is the stated risk level correct for this change?
+```
+
+Wait for the user to answer all 5 items. Collect the responses.
+
+If ANY item is answered "no":
+
+Display which items failed, for example:
+```
+Approval REJECTED. Failed items:
+  - Item 2 (ACs sufficient): [user's reason]
+  - Item 4 (Assumptions valid): [user's reason]
+
+Re-run the contractor with this feedback to revise the contract.
+Phase 2 will NOT be entered until all checklist items are approved.
+```
+
+**STOP. Do not proceed to Phase 2.**
+
+If ALL items are answered "yes", write `.signum/approval.json`:
+
+```bash
+APPROVAL_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq -n --arg ts "$APPROVAL_TS" \
+  '{
+    approved: true,
+    approvedAt: $ts,
+    checklist: {
+      goal_matches_intent: true,
+      acs_sufficient: true,
+      scope_correct: true,
+      assumptions_valid: true,
+      risk_appropriate: true
+    }
+  }' > .signum/approval.json
+echo "approval.json written at $APPROVAL_TS"
+```
+
+After writing approval.json, transition the contract status from `draft` to `active` and record the `activatedAt` timestamp:
 
 ```bash
 ACTIVATED_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1417,6 +1460,9 @@ HOLDOUT_ENV=$(build_envelope .signum/holdout_report.json)
 # Audit summary envelope
 AUDIT_ENV=$(build_envelope .signum/audit_summary.json)
 
+# Approval envelope
+APPROVAL_ENV=$(build_envelope .signum/approval.json)
+
 # Dynamic reviews: enumerate .signum/reviews/*.json
 REVIEWS_JSON='{'
 first=1
@@ -1452,6 +1498,7 @@ jq -n \
   --argjson mechanicEnv "$MECHANIC_ENV" \
   --argjson holdoutEnv "$HOLDOUT_ENV" \
   --argjson auditEnv "$AUDIT_ENV" \
+  --argjson approvalEnv "$APPROVAL_ENV" \
   --argjson reviewsEnv "$REVIEWS_JSON" \
   '{
     schemaVersion: $schemaVersion,
@@ -1470,6 +1517,7 @@ jq -n \
     diff: $diffEnv,
     baseline: $baselineEnv,
     executeLog: $executeEnv,
+    approval: $approvalEnv,
     checks: {
       mechanic: $mechanicEnv,
       holdout: $holdoutEnv,
