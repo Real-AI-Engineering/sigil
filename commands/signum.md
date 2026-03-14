@@ -339,6 +339,27 @@ jq -n --argjson total "$TOTAL" --arg grade "$GRADE" \
   > .signum/spec_quality.json
 ```
 
+#### Prose quality check (informational, non-blocking)
+
+Use the Bash tool to run the prose quality gate on the contract. This check is **informational only** — the pipeline continues regardless of findings.
+
+```bash
+PROSE_REPORT=""
+if [ -f lib/prose-check.sh ]; then
+  PROSE_REPORT=$(lib/prose-check.sh .signum/contract.json 2>/dev/null || echo '{}')
+  PROSE_TOTAL=$(echo "$PROSE_REPORT" | jq '.total_findings // 0')
+  PROSE_PASS=$(echo "$PROSE_REPORT" | jq -r '.pass // "true"')
+  echo "Prose quality: $PROSE_TOTAL finding(s), pass=$PROSE_PASS"
+
+  # Merge prose_warnings into spec_quality.json (non-blocking)
+  if [ -f .signum/spec_quality.json ]; then
+    jq --argjson prose "$PROSE_REPORT" '. + {prose_warnings: $prose}' \
+      .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+      && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+fi
+```
+
 ### Step 1.3.7: Multi-model spec validation (optional, if providers available)
 
 Use the Bash tool to check which providers are available:
