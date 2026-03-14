@@ -179,6 +179,22 @@ Use the Bash tool to prepare the workspace:
 mkdir -p .signum/reviews .signum/contracts
 touch .gitignore
 grep -q '^\.signum/$' .gitignore || echo '.signum/' >> .gitignore
+
+# Check external CLI availability
+CODEX_INSTALLED=$(which codex > /dev/null 2>&1 && echo "yes" || echo "no")
+GEMINI_INSTALLED=$(which gemini > /dev/null 2>&1 && echo "yes" || echo "no")
+EXTERNAL_COUNT=0
+[ "$CODEX_INSTALLED" = "yes" ] && EXTERNAL_COUNT=$((EXTERNAL_COUNT + 1))
+[ "$GEMINI_INSTALLED" = "yes" ] && EXTERNAL_COUNT=$((EXTERNAL_COUNT + 1))
+
+echo "External providers: codex=$CODEX_INSTALLED gemini=$GEMINI_INSTALLED ($EXTERNAL_COUNT/2)"
+if [ "$EXTERNAL_COUNT" -eq 0 ]; then
+  echo "NOTE: No external review CLIs installed. Single-model mode:"
+  echo "  - low risk:   AUTO_OK possible (Claude review sufficient)"
+  echo "  - medium risk: AUTO_OK possible (graceful degradation)"
+  echo "  - high risk:  AUTO_OK requires manual review (multi-model required)"
+  echo "  Install codex/gemini for full multi-model audit."
+fi
 ```
 
 ### Model Configuration
@@ -1178,6 +1194,8 @@ Read the contract's `riskLevel` and apply the matching ceremony profile. Steps m
 | 3.5 Synthesizer | run | run | run |
 
 **Budget targets:** Low <2 min, <$0.20 | Medium 3-5 min | High 5-10 min, full panel.
+
+**Single-model graceful degradation:** If external CLIs are not installed (not failed — genuinely absent), the synthesizer allows AUTO_OK with single Claude review for low and medium risk. High risk always requires multi-model or HUMAN_REVIEW.
 
 Use the Bash tool to read the risk level and save it for conditional checks:
 

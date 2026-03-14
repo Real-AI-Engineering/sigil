@@ -38,7 +38,8 @@ Read these files:
    - No MAJOR or CRITICAL findings from any reviewer
    - Review count gate (risk-proportional):
      - `low` risk: at least 1 reviewer successfully parsed (parseOk: true)
-     - `medium`/`high` risk: at least 2 out of 3 reviewers successfully parsed (parseOk: true)
+     - `medium` risk: at least 2 reviewers parsed, OR at least 1 parsed if all unavailable reviewers have `available: false` (CLI not installed, not a runtime/auth failure)
+     - `high` risk: at least 2 out of 3 reviewers successfully parsed (parseOk: true) — no single-model exception
    - Holdout report has no failures AND no errors (if holdout_report.json exists, `failed` must be 0 AND `errors` must be 0)
 
 3. **HUMAN_REVIEW** if:
@@ -63,7 +64,9 @@ list each failed/errored holdout ID, description, and error message from the `re
 - With 0 available reviews: decision is `HUMAN_REVIEW` (cannot auto-approve without evidence)
 - With 1 available review:
   - If contract `riskLevel` is `low`: full decision logic applies (single Claude review is sufficient)
-  - Otherwise: decision is at most `HUMAN_REVIEW` (never AUTO_OK with single review for medium/high risk)
+  - If contract `riskLevel` is `medium` AND all missing reviewers have `available: false` (not installed): full decision logic applies (graceful degradation — external CLIs are optional)
+  - If contract `riskLevel` is `medium` AND any missing reviewer has a non-`available` failure (auth, timeout, parse_error): decision is at most `HUMAN_REVIEW` (CLI was expected to work but failed)
+  - If contract `riskLevel` is `high`: decision is at most `HUMAN_REVIEW` (never AUTO_OK with single review for high risk)
 - With 2+ available reviews: full decision logic applies
 
 ### Confidence Scoring
