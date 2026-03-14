@@ -69,13 +69,16 @@ After determining the decision, compute confidence metrics:
   Read from `.signum/execute_log.json`
 - `baseline_stability` = 100 if no regressions, else 100 * (checks_stable / checks_total)
   Read from `.signum/mechanic_report.json`
+- `behavioral_evidence` = holdout pass rate (from `.signum/holdout_report.json`):
+  - If total holdouts > 0: (passed / total) * 100
+  - If total holdouts == 0: 75 (neutral — no evidence, no penalty)
 - `review_alignment`:
   - 3/3 APPROVE = 100
   - 2/3 APPROVE + 1 CONDITIONAL = 70
   - 2/3 APPROVE + 1 REJECT = 40
   - 1/3 APPROVE = 20
   - 0/3 APPROVE = 0
-- `overall` = 0.40 * execution_health + 0.30 * baseline_stability + 0.30 * review_alignment
+- `overall` = 0.25 * execution_health + 0.15 * baseline_stability + 0.35 * behavioral_evidence + 0.25 * review_alignment
 
 Round all values to integers.
 
@@ -99,8 +102,9 @@ Write `.signum/audit_summary.json`:
   "confidence": {
     "execution_health": 95,
     "baseline_stability": 100,
+    "behavioral_evidence": 75,
     "review_alignment": 70,
-    "overall": 85
+    "overall": 74
   }
 }
 ```
