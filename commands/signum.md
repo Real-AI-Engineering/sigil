@@ -271,7 +271,8 @@ print(model)
 
 SIGNUM_CODEX_MODEL=$(_resolve_model "review" "codex")
 SIGNUM_GEMINI_MODEL=$(_resolve_model "review" "gemini")
-echo "codex_model=${SIGNUM_CODEX_MODEL:-(cli default)} gemini_model=${SIGNUM_GEMINI_MODEL:-(cli default)}"
+SIGNUM_CODEX_PROFILE="${SIGNUM_CODEX_PROFILE:-}"
+echo "codex_model=${SIGNUM_CODEX_MODEL:-(cli default)} gemini_model=${SIGNUM_GEMINI_MODEL:-(cli default)} codex_profile=${SIGNUM_CODEX_PROFILE:-(none)}"
 ```
 
 Save `SIGNUM_CODEX_MODEL` and `SIGNUM_GEMINI_MODEL` for use in all subsequent codex/gemini invocations.
@@ -614,7 +615,9 @@ Be specific and brief. Focus on gaps that would cause implementation mistakes."
 
 CODEX_MODEL_FLAG=""
 [ -n "$SIGNUM_CODEX_MODEL" ] && CODEX_MODEL_FLAG="--model $SIGNUM_CODEX_MODEL"
-codex exec --ephemeral -C "$PWD" -p fast $CODEX_MODEL_FLAG --output-last-message "$OUT" "$PROMPT" 2>"$ERR"
+CODEX_PROFILE_FLAG=""
+[ -n "$SIGNUM_CODEX_PROFILE" ] && CODEX_PROFILE_FLAG="-p $SIGNUM_CODEX_PROFILE"
+codex exec --ephemeral -C "$PWD" $CODEX_PROFILE_FLAG $CODEX_MODEL_FLAG --output-last-message "$OUT" "$PROMPT" 2>"$ERR"
 CODEX_SPEC_EXIT=$?
 CODEX_SPEC_OUT=$(cat "$OUT" 2>/dev/null || cat "$ERR" | head -c 1000)
 rm -f "$OUT" "$ERR"
@@ -1493,8 +1496,11 @@ PROMPT=$(cat .signum/review_prompt_codex.txt)
 OUT=$(mktemp)
 CODEX_MODEL_FLAG=""
 [ -n "$SIGNUM_CODEX_MODEL" ] && CODEX_MODEL_FLAG="--model $SIGNUM_CODEX_MODEL"
-codex exec --ephemeral -C "$PWD" -p fast $CODEX_MODEL_FLAG --output-last-message "$OUT" "$PROMPT" \
+CODEX_PROFILE_FLAG=""
+[ -n "$SIGNUM_CODEX_PROFILE" ] && CODEX_PROFILE_FLAG="-p $SIGNUM_CODEX_PROFILE"
+codex exec --ephemeral -C "$PWD" $CODEX_PROFILE_FLAG $CODEX_MODEL_FLAG --output-last-message "$OUT" "$PROMPT" \
   > .signum/reviews/codex_stdout.txt 2>&1
+echo $? > .signum/reviews/codex_exit_code.txt
 cp "$OUT" .signum/reviews/codex_raw.txt 2>/dev/null || \
   cp .signum/reviews/codex_stdout.txt .signum/reviews/codex_raw.txt
 rm -f "$OUT"
@@ -1508,6 +1514,7 @@ PROMPT=$(cat .signum/review_prompt_gemini.txt)
 GEMINI_MODEL_FLAG=""
 [ -n "$SIGNUM_GEMINI_MODEL" ] && GEMINI_MODEL_FLAG="--model $SIGNUM_GEMINI_MODEL"
 gemini $GEMINI_MODEL_FLAG -p "$PROMPT" > .signum/reviews/gemini_raw.txt 2>&1
+echo $? > .signum/reviews/gemini_exit_code.txt
 echo "GEMINI_DONE"
 ```
 
@@ -1528,11 +1535,20 @@ test -f .signum/reviews/claude.json && jq -e '.verdict' .signum/reviews/claude.j
 
 After collection, parse codex output and parse gemini output.
 
-If CODEX_AVAILABLE: attempt 3-level parsing of `.signum/reviews/codex_raw.txt`:
+If CODEX_AVAILABLE: check exit code first, then attempt 3-level parsing of `.signum/reviews/codex_raw.txt`:
 
 ```bash
+CODEX_EXIT=$(cat .signum/reviews/codex_exit_code.txt 2>/dev/null || echo "1")
+if [ "$CODEX_EXIT" != "0" ]; then
+  # Crash → UNAVAILABLE (not CONDITIONAL)
+  RAW=$(head -c 2000 .signum/reviews/codex_stdout.txt 2>/dev/null)
+  jq -n --arg raw "$RAW" --arg code "$CODEX_EXIT" \
+    '{"verdict":"UNAVAILABLE","findings":[],"summary":("Codex invocation failed (exit " + $code + ")"),"available":false,"raw":$raw}' \
+    > .signum/reviews/codex.json
+  echo "codex: invocation failed (exit $CODEX_EXIT), marked UNAVAILABLE"
+
 # Level 1: valid JSON directly
-if jq -e '.verdict' .signum/reviews/codex_raw.txt > /dev/null 2>&1; then
+elif jq -e '.verdict' .signum/reviews/codex_raw.txt > /dev/null 2>&1; then
   cp .signum/reviews/codex_raw.txt .signum/reviews/codex.json
   echo "codex: parsed as direct JSON"
 
@@ -1568,10 +1584,21 @@ echo '{"verdict":"UNAVAILABLE","findings":[],"summary":"Codex CLI not installed"
   > .signum/reviews/codex.json
 ```
 
-If GEMINI_AVAILABLE: attempt 3-level parsing of `.signum/reviews/gemini_raw.txt`:
+Parse gemini output:
+
+If GEMINI_AVAILABLE: check exit code first, then attempt 3-level parsing of `.signum/reviews/gemini_raw.txt`:
 
 ```bash
-if jq -e '.verdict' .signum/reviews/gemini_raw.txt > /dev/null 2>&1; then
+GEMINI_EXIT=$(cat .signum/reviews/gemini_exit_code.txt 2>/dev/null || echo "1")
+if [ "$GEMINI_EXIT" != "0" ]; then
+  # Crash → UNAVAILABLE (not CONDITIONAL)
+  RAW=$(head -c 2000 .signum/reviews/gemini_raw.txt 2>/dev/null)
+  jq -n --arg raw "$RAW" --arg code "$GEMINI_EXIT" \
+    '{"verdict":"UNAVAILABLE","findings":[],"summary":("Gemini invocation failed (exit " + $code + ")"),"available":false,"raw":$raw}' \
+    > .signum/reviews/gemini.json
+  echo "gemini: invocation failed (exit $GEMINI_EXIT), marked UNAVAILABLE"
+
+elif jq -e '.verdict' .signum/reviews/gemini_raw.txt > /dev/null 2>&1; then
   cp .signum/reviews/gemini_raw.txt .signum/reviews/gemini.json
   echo "gemini: parsed as direct JSON"
 
