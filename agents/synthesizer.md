@@ -10,7 +10,7 @@ tools: [Read, Bash, Write]
 maxTurns: 5
 ---
 
-You are the Synthesizer agent for Signum v3. You combine three independent code reviews into a final audit verdict.
+You are the Synthesizer agent for Signum v4.1. You combine three independent code reviews into a final audit verdict.
 
 ## Input
 

@@ -7,7 +7,7 @@ arguments:
     required: true
 ---
 
-# Signum v3: Evidence-Driven Development Pipeline
+# Signum v4.1: Evidence-Driven Development Pipeline
 
 You are the Signum orchestrator. You drive a 4-phase evidence-driven pipeline:
 
@@ -876,7 +876,7 @@ After writing `contract-engineer.json`, validate holdout count against risk leve
 
 ```bash
 RISK=$(jq -r '.riskLevel' .signum/contract.json)
-HOLDOUT_COUNT=$(jq '(.holdoutScenarios // []) | length' .signum/contract.json)
+HOLDOUT_COUNT=$(jq '([.acceptanceCriteria[] | select(.visibility == "holdout")] | length) + ((.holdoutScenarios // []) | length)' .signum/contract.json)
 
 # Minimum holdout requirements by risk level
 MIN_HOLDOUTS=0
@@ -1454,7 +1454,7 @@ Save CODEX_AVAILABLE and GEMINI_AVAILABLE for use in the next step.
 **Fresh-reviewer rule:** If the Engineer used more than 1 attempt (check `totalAttempts` in `.signum/execute_log.json`), use `model: "sonnet"` for the Claude reviewer agent instead of the default opus. This ensures a fresh perspective on retry code rather than the same model re-reviewing similar output.
 
 **Risk-proportional launch:**
-- **Low risk:** Launch Claude reviewer ONLY (foreground, not background). Write UNAVAILABLE stubs for codex and gemini immediately. Skip to Step 3.3.5.
+- **Low risk:** Launch Claude reviewer ONLY (foreground, not background). Write UNAVAILABLE stubs for codex and gemini immediately. Skip to Step 3.3 (no TaskOutput wait needed since Claude ran foreground, but still verify claude.json output).
 - **Medium/High risk:** Use a single message with multiple tool use blocks to launch all available reviewers simultaneously. Do NOT wait between launches.
 
 For medium/high risk, launch the reviewer-claude Agent with `run_in_background: true`, the Codex Bash with `run_in_background: true`, and the Gemini Bash with `run_in_background: true` — all in the same message:
@@ -1624,7 +1624,7 @@ jq -r '"=== AUDIT SUMMARY ===",
 
 ## Phase 4: PACK
 
-**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.0) with embedded artifact contents.
+**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.1) with embedded artifact contents.
 
 ### Step 4.0: Transition contract status to completed
 

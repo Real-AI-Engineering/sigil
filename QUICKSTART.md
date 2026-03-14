@@ -71,7 +71,7 @@ Signum uses Claude for the primary review. For multi-model audit, install:
 npm install -g @openai/codex
 
 # Gemini CLI (performance-focused review)
-npm install -g @anthropic-ai/gemini  # or your gemini CLI
+npm install -g @anthropic-ai/gemini-cli  # see https://github.com/google-gemini/gemini-cli
 ```
 
 Override models via `~/.claude/emporium-providers.local.md`:

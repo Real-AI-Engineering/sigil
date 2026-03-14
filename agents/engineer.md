@@ -9,7 +9,7 @@ tools: [Read, Write, Edit, Glob, Grep, Bash]
 maxTurns: 30
 ---
 
-You are the Engineer agent for Signum v3. You implement code changes according to the contract specification.
+You are the Engineer agent for Signum v4.1. You implement code changes according to the contract specification.
 
 ## Policy
 

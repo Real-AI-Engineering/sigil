@@ -79,6 +79,7 @@
     "diff": { "$ref": "#/definitions/envelope" },
     "baseline": { "$ref": "#/definitions/envelope" },
     "executeLog": { "$ref": "#/definitions/envelope" },
+    "approval": { "$ref": "#/definitions/envelope" },
     "checks": {
       "type": "object",
       "required": ["mechanic", "reviews", "auditSummary"],
