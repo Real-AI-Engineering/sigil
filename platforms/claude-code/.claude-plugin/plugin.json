@@ -1,0 +1,10 @@
+{
+  "name": "signum",
+  "description": "Evidence-driven development pipeline with multi-model code review",
+  "version": "4.1.1",
+  "author": { "name": "heurema" },
+  "homepage": "https://github.com/heurema/signum",
+  "repository": "https://github.com/heurema/signum",
+  "license": "MIT",
+  "keywords": ["dev-pipeline", "code-review", "multi-model", "evidence-driven", "proofpack"]
+}

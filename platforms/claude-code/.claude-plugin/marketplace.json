@@ -1,0 +1,12 @@
+{
+  "name": "signum",
+  "plugins": [
+    {
+      "name": "signum",
+      "description": "Evidence-driven development pipeline with multi-model code review",
+      "commands": ["./commands"],
+      "agents": ["./agents"],
+      "strict": false
+    }
+  ]
+}

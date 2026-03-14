@@ -1,0 +1,7 @@
+interface:
+  display_name: "Signum"
+  short_description: "Contract-first implementation pipeline with audit and proofpack"
+  default_prompt: "Use Signum to define a contract first, implement against it, audit the result, and package proof."
+
+policy:
+  allow_implicit_invocation: true

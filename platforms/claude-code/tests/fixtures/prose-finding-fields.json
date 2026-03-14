@@ -1,0 +1,6 @@
+{
+  "_comment": "Example finding object showing required fields: text, location, suggestion",
+  "text": "as needed",
+  "location": "goal",
+  "suggestion": "Remove vague hedge phrase: replace 'as needed' with specific language"
+}

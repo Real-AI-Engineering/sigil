@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "3.2",
+  "contractId": "prose-test-banned",
+  "goal": "Build a system that handles requests as needed and performs various tasks as applicable.",
+  "inScope": ["src/handler.js"],
+  "acceptanceCriteria": [
+    {
+      "id": "AC01",
+      "description": "The handler must process events etc and respond as needed"
+    },
+    {
+      "id": "AC02",
+      "description": "Returns response with suitable format"
+    }
+  ],
+  "riskLevel": "low",
+  "assumptions": [],
+  "outOfScope": [],
+  "openQuestions": [],
+  "requiredInputsProvided": true
+}

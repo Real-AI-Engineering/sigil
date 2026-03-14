@@ -1,0 +1,23 @@
+{
+  "_comment": "Expected output schema for prose-check.sh. Validates the top-level structure of the JSON report.",
+  "total_findings": 0,
+  "pass": true,
+  "categories": {
+    "banned_phrases": {
+      "count": 0,
+      "findings": []
+    },
+    "imprecise_quantifiers": {
+      "count": 0,
+      "findings": []
+    },
+    "passive_voice": {
+      "count": 0,
+      "findings": []
+    },
+    "implementation_leakage": {
+      "count": 0,
+      "findings": []
+    }
+  }
+}

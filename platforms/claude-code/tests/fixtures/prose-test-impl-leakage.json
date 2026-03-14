@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "3.2",
+  "contractId": "prose-test-impl-leakage",
+  "goal": "Build a data processing pipeline using Docker and in Python with Redis for caching.",
+  "inScope": ["src/pipeline.py"],
+  "acceptanceCriteria": [
+    {
+      "id": "AC01",
+      "description": "The pipeline processes 1000 records per second"
+    },
+    {
+      "id": "AC02",
+      "description": "Results are stored within 100ms"
+    }
+  ],
+  "riskLevel": "low",
+  "assumptions": [],
+  "outOfScope": [],
+  "openQuestions": [],
+  "requiredInputsProvided": true
+}
