@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.2.0] - 2026-03-15
+
+### Added
+- Project intent layer: contractor reads `project.intent.md` from target project root
+- `contextInheritance` block in contract schema v3.3 (projectRef, projectIntentSha256)
+- Intent alignment check (LLM-based, medium/high risk, informational)
+- Missing project intent blocks medium/high risk tasks with escapable question
+
 ## v4.1.0 (2026-03-09)
 
 ### Security

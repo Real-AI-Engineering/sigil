@@ -113,7 +113,7 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"3.0"` | Always "3.0" |
+| `schemaVersion` | `"3.0"`–`"3.3"` | Schema version |
 | `goal` | string | What to build (min 10 chars) |
 | `inScope` | string[] | Items in scope (min 1) |
 | `allowNewFilesUnder` | string[] | Directories where new files may be created (optional) |
@@ -123,6 +123,9 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `riskLevel` | `low\|medium\|high` | Deterministic risk assessment |
 | `riskSignals` | string[] | Why risk level was assigned |
 | `openQuestions` | string[] | Must be empty to proceed |
+| `contextInheritance` | object | Project context references (optional) |
+| `contextInheritance.projectRef` | string\|null | Path to project.intent.md, "not_found", null (waiver), or absent (legacy) |
+| `contextInheritance.projectIntentSha256` | string | SHA-256 of project.intent.md at contract creation |
 
 ### proofpack.json fields (v4.1)
 

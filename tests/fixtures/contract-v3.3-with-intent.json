@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "3.3",
+  "contractId": "sig-20260315-test",
+  "status": "draft",
+  "timestamps": {"createdAt": "2026-03-15T10:00:00Z"},
+  "goal": "Test contract with project intent support",
+  "inScope": ["tests/fixtures/"],
+  "acceptanceCriteria": [
+    {"id": "AC1", "description": "contextInheritance is preserved", "visibility": "visible",
+     "verify": {"type": "manual", "value": "check contextInheritance in output"}}
+  ],
+  "riskLevel": "low",
+  "contextInheritance": {
+    "projectRef": "project.intent.md",
+    "projectIntentSha256": "abc123def456"
+  }
+}

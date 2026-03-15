@@ -32,7 +32,7 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
   "phases": {
     "CONTRACT": {
       "description": "Transform request into verifiable JSON contract",
-      "steps": ["contractor agent", "spec quality gate (7 dimensions)", "prose checks", "multi-model spec validation", "clover reconstruction test", "human approval"],
+      "steps": ["contractor agent", "spec quality gate (7 dimensions)", "prose checks", "intent alignment check", "multi-model spec validation", "clover reconstruction test", "human approval"],
       "duration": "~30s",
       "approvals": 1
     },
@@ -111,7 +111,8 @@ rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json"
       "${DIR}policy_violations.json" "${DIR}spec_quality.json" \
       "${DIR}spec_validation.json" "${DIR}clover_report.json" \
       "${DIR}contract-hash.txt" "${DIR}execution_context.json" \
-      "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" 2>/dev/null || true
+      "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" \
+      "${DIR}intent_check.json" 2>/dev/null || true
 
 # Update status in index.json
 update_contract_status "$CONTRACT_ID" "archived"
@@ -360,7 +361,8 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch \
        .signum/reviews/claude.json .signum/reviews/codex.json .signum/reviews/gemini.json \
        .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
        .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt \
-       .signum/clover_report.json .signum/approval.json
+       .signum/clover_report.json .signum/approval.json \
+       .signum/intent_check.json
 ```
 
 ---
@@ -619,6 +621,53 @@ if [ -f lib/prose-check.sh ]; then
 fi
 ```
 
+### Step 1.3.6: Intent alignment check (informational, medium/high risk only)
+
+**Skip if `riskLevel` is `low`.** Low-risk tasks don't benefit from LLM alignment checks.
+
+Check if contract has a project intent reference:
+
+```bash
+PROJECT_REF=$(jq -r '.contextInheritance.projectRef // "absent"' .signum/contract.json)
+RISK=$(jq -r '.riskLevel' .signum/contract.json)
+if [ "$RISK" = "low" ] || [ "$PROJECT_REF" = "absent" ] || [ "$PROJECT_REF" = "null" ] || [ "$PROJECT_REF" = "not_found" ]; then
+  echo "Intent alignment check: skipped (risk=$RISK, projectRef=$PROJECT_REF)"
+else
+  echo "Running intent alignment check against $PROJECT_REF..."
+fi
+```
+
+If not skipped, read project.intent.md and launch a sonnet subagent:
+
+```
+You are checking whether a task contract aligns with its project's stated intent.
+
+Project intent:
+<contents of project.intent.md from PROJECT_ROOT>
+
+Contract:
+Goal: <contract goal>
+Out of scope: <contract outOfScope>
+Acceptance criteria: <AC descriptions>
+
+Check:
+1. Does the contract goal relate to the project's stated goal or core capabilities?
+2. Does the contract scope overlap with any project non-goals?
+3. Does the contract use terminology inconsistent with the project glossary?
+
+Output JSON only:
+{
+  "aligned": true|false,
+  "concerns": ["<concern 1>", ...],
+  "glossary_violations": ["<used 'X' but glossary says use 'Y'>", ...]
+}
+```
+
+Parse the subagent response as JSON. If parsing fails, write safe default:
+`{"aligned": null, "concerns": [], "glossary_violations": [], "parse_error": true}`
+
+Write result to `.signum/intent_check.json`.
+
 ### Step 1.3.7: Multi-model spec validation (optional, if providers available)
 
 **Skip if `riskLevel` is `low`.** Low-risk tasks don't benefit from multi-model spec validation — proceed directly to Step 1.4.
@@ -840,6 +889,44 @@ jq -r 'if .riskLevel == "high" then "Risk signals: " + (.riskSignals // [] | joi
   .signum/contract.json
 ```
 
+```bash
+# Show project intent status
+if jq -e '.contextInheritance.projectRef' .signum/contract.json >/dev/null 2>&1; then
+  PROJECT_REF=$(jq -r '.contextInheritance.projectRef' .signum/contract.json)
+  if [ "$PROJECT_REF" = "not_found" ]; then
+    echo "Project intent: not found (low risk, continued)"
+  else
+    echo "Project intent: $PROJECT_REF (loaded)"
+  fi
+elif jq -e '.contextInheritance | has("projectRef")' .signum/contract.json >/dev/null 2>&1; then
+  echo "Project intent: waived by user"
+fi
+```
+
+```bash
+# Show intent alignment results
+INTENT_CHECK=".signum/intent_check.json"
+if [ -f "$INTENT_CHECK" ]; then
+  ALIGNED=$(jq -r '.aligned // "null"' "$INTENT_CHECK")
+  PARSE_ERR=$(jq -r '.parse_error // false' "$INTENT_CHECK")
+  CONCERNS=$(jq -r '.concerns | length' "$INTENT_CHECK")
+  if [ "$PARSE_ERR" = "true" ] || [ "$ALIGNED" = "null" ]; then
+    echo "Intent alignment: skipped (check failed)"
+  elif [ "$ALIGNED" = "false" ] || [ "$CONCERNS" -gt 0 ]; then
+    echo ""
+    echo "--- Intent alignment WARNING ---"
+    jq -r '.concerns[]' "$INTENT_CHECK" | sed 's/^/  - /'
+    GLOSSARY_V=$(jq -r '.glossary_violations | length' "$INTENT_CHECK")
+    if [ "$GLOSSARY_V" -gt 0 ]; then
+      echo "Glossary violations:"
+      jq -r '.glossary_violations[]' "$INTENT_CHECK" | sed 's/^/  - /'
+    fi
+  else
+    echo "Intent alignment: OK"
+  fi
+fi
+```
+
 **Present the following 5-item approval checklist to the user.** Display it as a numbered list and ask for a yes/no answer for each item:
 
 ```
@@ -933,7 +1020,8 @@ Use the Bash tool to create a contract stripped of holdout scenarios and holdout
 jq '{
   schemaVersion, contractId, status, timestamps, goal, inScope, allowNewFilesUnder, outOfScope,
   acceptanceCriteria: [.acceptanceCriteria[] | select(.visibility != "holdout")],
-  assumptions, openQuestions, riskLevel, riskSignals, requiredInputsProvided
+  assumptions, openQuestions, riskLevel, riskSignals, requiredInputsProvided,
+  contextInheritance
 } | with_entries(select(.value != null))' .signum/contract.json > .signum/contract-engineer.json
 
 # Generate holdout manifest for committed spec

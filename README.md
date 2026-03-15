@@ -63,9 +63,11 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 
 ## Features
 
-**Spec quality gate** — Before implementation starts, your spec is scored across six dimensions: Testability, Negative coverage, Clarity, Scope boundedness, Completeness, Boundary cases. Grade D (below 60) is a hard stop with specific feedback on what's missing. The gate runs on the specification, not the code.
+**Spec quality gate** — Before implementation starts, your spec is scored across seven dimensions: Testability, Negative coverage, Clarity, Scope boundedness, Completeness, Boundary cases, NL Consistency. Grade D (below 60) is a hard stop with specific feedback on what's missing. The gate runs on the specification, not the code.
 
 **Holdout scenarios** — The Contractor generates hidden acceptance criteria the Engineer never sees. When implementation is complete, holdouts run against the result — blind testing for cases the agent couldn't optimize for. Verification uses a typed DSL with `http`, `exec` (whitelisted binaries only), and `expect` primitives — no shell execution, no `eval`. Minimum counts enforced by risk level: 0 for low, 2 for medium, 5 for high.
+
+**Project intent alignment** — If the target project has a `project.intent.md` at its root, the contractor reads it before generating contracts. Non-goals and glossary terms flow into contract scope and terminology. For medium/high-risk tasks, missing project intent triggers a blocking question. An LLM-based alignment check warns when the contract diverges from project goals.
 
 **Data-level blinding** — The Engineer reads `contract-engineer.json`, not `contract.json`. Holdout scenarios are physically removed from the file — not hidden by instruction. The agent cannot infer them from context or structure.
 

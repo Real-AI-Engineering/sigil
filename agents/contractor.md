@@ -20,6 +20,10 @@ You receive:
 ## Process
 
 1. **Parse request** into goal, scope boundaries, and acceptance criteria
+1.5. **Read project intent** (before scan):
+   - Check if `PROJECT_ROOT/project.intent.md` exists
+   - If exists: read it, extract Goal, Core Capabilities, Non-Goals, Glossary
+   - If missing: note absence, continue to step 2 (decision deferred to step 3.5)
 2. **Scan codebase** (deterministic):
    - `find` / `tree` to understand project structure
    - `grep` for relevant files matching the feature description
@@ -29,11 +33,29 @@ You receive:
    - low: <5 estimated affected files AND 1 primary language
    - medium: 5-15 files OR 2+ languages OR test infrastructure changes
    - high: >15 files OR security keywords (auth, token, secret, payment, crypto, permission, password, jwt, oauth, migration, schema, deploy, credential, session, certificate, ssl, tls)
+3.5. **Project intent gate** (after risk assessment):
+   - If project.intent.md was found:
+     - Set `contextInheritance.projectRef` = `"project.intent.md"`
+     - Compute SHA-256 of file contents, set `contextInheritance.projectIntentSha256`
+     - Use project non-goals to populate `outOfScope` if user didn't specify
+     - Use glossary terms in acceptance criteria language
+   - If project.intent.md was NOT found AND riskLevel >= medium:
+     - Add to openQuestions: `"[INTENT_WAIVER] Project intent not defined. Create project.intent.md at repo root, or reply 'proceed without project context' to continue."`
+     - Set `requiredInputsProvided` = false
+   - If project.intent.md was NOT found AND riskLevel = low:
+     - Set `contextInheritance.projectRef` = `"not_found"`
+   - **Waiver detection** (when re-launched with user answers):
+     1. Find the answer to the open question containing `[INTENT_WAIVER]`
+     2. If affirmative ("yes", "proceed without project context", "yes, proceed" — case-insensitive):
+        - Set `contextInheritance.projectRef` = null, remove the question
+     3. If negative ("no", "do not proceed", "don't" — case-insensitive):
+        - Keep the question, keep `requiredInputsProvided` = false
+     4. The `[INTENT_WAIVER]` marker ensures matching only this specific question, not other open questions
 4. **Generate contract.json** with:
    - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
    - `status`: always set to `"draft"` when generating a new contract
    - `timestamps`: object with `createdAt` set to the current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), e.g. `"2026-03-13T10:00:00Z"`
-   - `schemaVersion`: always `"3.2"` for new contracts
+   - `schemaVersion`: always `"3.3"` for new contracts
    - goal, inScope, outOfScope, allowNewFilesUnder (if new files needed)
    - acceptanceCriteria with typed verify blocks (DSL format), each with `visibility: "visible"`
    - assumptions (state what you're assuming about the codebase)
@@ -58,6 +80,7 @@ You receive:
      GOOD: `{"http": {"method": "GET", "url": "localhost:8000/api/endpoint"}, "capture": "r"}` then `{"expect": {"json_path": "$.status", "source": "r", "equals": 200}}`
      GOOD: `{"exec": {"argv": ["test", "-f", "src/module.py"]}}`
    - riskLevel, riskSignals
+   - contextInheritance (projectRef, projectIntentSha256 — set in step 3.5)
 5. **Detect lineage** (if `.signum/contracts/index.json` exists):
    - Read completed/archived contracts from index.json
    - For each, check if their inScope files overlap with the new contract's inScope
