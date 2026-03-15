@@ -1808,8 +1808,11 @@ PASS1_FINDINGS_COUNT=$(jq '{
   major: [.reviews[].findings[]? | select(.severity == "MAJOR")] | length,
   minor: [.reviews[].findings[]? | select(.severity == "MINOR")] | length
 }' .signum/audit_summary.json)
+MECH_REG=$(jq -r '.hasRegressions' .signum/mechanic_report.json 2>/dev/null || echo "false")
+HOLDOUT_FAIL=$(jq '.failed // 0' .signum/holdout_report.json 2>/dev/null || echo 0)
 jq -n --argjson score "$ITERATION_SCORE" --argjson findings "$PASS1_FINDINGS" --argjson findingsCount "$PASS1_FINDINGS_COUNT" \
-  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'", "findingsCount": $findingsCount, "canonicalFindings": $findings}]' \
+  --arg mechReg "$MECH_REG" --argjson holdoutFail "$HOLDOUT_FAIL" \
+  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'", "findingsCount": $findingsCount, "canonicalFindings": $findings, "mechanicRegressions": ($mechReg == "true"), "holdoutFailures": $holdoutFail}]' \
   > .signum/audit_iteration_log.json
 
 echo "Iteration 1 stored. Best score: $BEST_SCORE"
@@ -1898,6 +1901,7 @@ echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.j
 **Rollback to best candidate if current is worse:**
 
 ```bash
+SKIP_ITERATION=false
 if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; then
   echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
   git clean -fd
@@ -1913,9 +1917,14 @@ if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; t
   else
     echo "ROLLBACK_FAILED: git apply failed for iteration $BEST_ITERATION — forcing early stop"
     NO_IMPROVE_COUNT=99
+    SKIP_ITERATION=true
   fi
 fi
+# If rollback failed, skip repair engineer and audit re-run — the early stop condition
+# (NO_IMPROVE_COUNT=99) will terminate the loop on the next entry condition check.
 ```
+
+**If `SKIP_ITERATION` is `true`, skip the repair engineer launch and all remaining steps in this iteration — proceed directly back to "Check entry conditions", which will trigger early stop due to `NO_IMPROVE_COUNT=99`.**
 
 **Launch repair engineer:**
 
@@ -1994,8 +2003,11 @@ NEW_FINDINGS_COUNT=$(jq '{
 }' .signum/audit_summary.json)
 
 # Update iteration log
+MECH_REG=$(jq -r '.hasRegressions' .signum/mechanic_report.json 2>/dev/null || echo "false")
+HOLDOUT_FAIL=$(jq '.failed // 0' .signum/holdout_report.json 2>/dev/null || echo 0)
 jq --argjson score "$NEW_SCORE" --arg decision "$NEW_DECISION" --argjson pass "$ITER_NUM" --argjson findings "$NEW_FINDINGS" --argjson findingsCount "$NEW_FINDINGS_COUNT" \
-  '. + [{"pass": $pass, "score": $score, "decision": $decision, "findingsCount": $findingsCount, "canonicalFindings": $findings}]' \
+  --arg mechReg "$MECH_REG" --argjson holdoutFail "$HOLDOUT_FAIL" \
+  '. + [{"pass": $pass, "score": $score, "decision": $decision, "findingsCount": $findingsCount, "canonicalFindings": $findings, "mechanicRegressions": ($mechReg == "true"), "holdoutFailures": $holdoutFail}]' \
   .signum/audit_iteration_log.json > .signum/audit_iteration_log.json.tmp \
   && mv .signum/audit_iteration_log.json.tmp .signum/audit_iteration_log.json
 
@@ -2026,12 +2038,14 @@ After loop exits, ensure the best candidate is active:
 ```bash
 ITERATIONS_USED=$CURRENT_ITERATION
 
+RESTORE_FAILED=false
 if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
   echo "Restoring best candidate from iteration $BEST_ITERATION"
   git clean -fd
   git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
   if ! git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
     echo "ERROR: Failed to apply best candidate patch — forcing HUMAN_REVIEW"
+    RESTORE_FAILED=true
     FINAL_DECISION="HUMAN_REVIEW"
     jq '.decision = "HUMAN_REVIEW" | .terminalReason = "final restore of best candidate patch failed"' \
       .signum/audit_summary.json > .signum/audit_summary.json.tmp \
@@ -2048,35 +2062,39 @@ if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
 fi
 
 # Determine terminal decision from best candidate
-FINAL_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+if [ "$RESTORE_FAILED" != "true" ]; then
+  FINAL_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+fi
 EARLY_STOP=$( [ "$NO_IMPROVE_COUNT" -ge 2 ] && echo "true" || echo "false" )
 EARLY_STOP_REASON=""
 [ "$EARLY_STOP" = "true" ] && EARLY_STOP_REASON="no improvement for 2 consecutive iterations"
 [ "$CURRENT_ITERATION" -ge "$MAX_ITERATIONS" ] && EARLY_STOP="true" && EARLY_STOP_REASON="max iterations reached"
 
-# Terminal override based on remaining findings in best candidate
-REMAINING_CRITICAL=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL")] | length' .signum/audit_summary.json)
-REMAINING_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
-REMAINING_MINOR=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
+if [ "$RESTORE_FAILED" != "true" ]; then
+  # Terminal override based on remaining findings in best candidate
+  REMAINING_CRITICAL=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL")] | length' .signum/audit_summary.json)
+  REMAINING_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
+  REMAINING_MINOR=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
 
-BEST_MECH_REGRESSIONS=$(jq -r '.hasRegressions' .signum/mechanic_report.json 2>/dev/null || echo "false")
-BEST_HOLDOUT_FAILED=$(jq '.failed // 0' .signum/holdout_report.json 2>/dev/null || echo 0)
+  BEST_MECH_REGRESSIONS=$(jq -r '.hasRegressions' .signum/mechanic_report.json 2>/dev/null || echo "false")
+  BEST_HOLDOUT_FAILED=$(jq '.failed // 0' .signum/holdout_report.json 2>/dev/null || echo 0)
 
-if [ "$REMAINING_CRITICAL" -gt 0 ]; then
-  FINAL_DECISION="AUTO_BLOCK"
-  REMAINING_SEV="CRITICAL"
-elif [ "$REMAINING_MAJOR" -gt 0 ]; then
-  FINAL_DECISION="HUMAN_REVIEW"
-  REMAINING_SEV="MAJOR"
-elif [ "$BEST_MECH_REGRESSIONS" = "true" ] || [ "$BEST_HOLDOUT_FAILED" -gt 0 ]; then
-  FINAL_DECISION="HUMAN_REVIEW"
-  REMAINING_SEV="mechanic/holdout"
-elif [ "$REMAINING_MINOR" -gt 0 ]; then
-  FINAL_DECISION="AUTO_OK"
-  REMAINING_SEV="MINOR"
-else
-  FINAL_DECISION="AUTO_OK"
-  REMAINING_SEV="none"
+  if [ "$REMAINING_CRITICAL" -gt 0 ]; then
+    FINAL_DECISION="AUTO_BLOCK"
+    REMAINING_SEV="CRITICAL"
+  elif [ "$REMAINING_MAJOR" -gt 0 ]; then
+    FINAL_DECISION="HUMAN_REVIEW"
+    REMAINING_SEV="MAJOR"
+  elif [ "$BEST_MECH_REGRESSIONS" = "true" ] || [ "$BEST_HOLDOUT_FAILED" -gt 0 ]; then
+    FINAL_DECISION="HUMAN_REVIEW"
+    REMAINING_SEV="MAJOR"
+  elif [ "$REMAINING_MINOR" -gt 0 ]; then
+    FINAL_DECISION="AUTO_OK"
+    REMAINING_SEV="MINOR"
+  else
+    FINAL_DECISION="AUTO_OK"
+    REMAINING_SEV="none"
+  fi
 fi
 
 # Update audit_summary with iteration metadata
