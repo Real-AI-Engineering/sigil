@@ -73,7 +73,7 @@ Codex and Gemini receive only the goal and diff — no contract details, no mech
 
 The synthesizer also computes a confidence score (0-100) based on execution health, baseline stability, and review alignment.
 
-#### Iterative Review-Fix Loop (v4.2+)
+#### Iterative Review-Fix Loop (v4.6+)
 
 If the synthesizer finds MAJOR or CRITICAL issues, the AUDIT phase enters an iterative repair loop instead of stopping:
 
@@ -96,7 +96,7 @@ Embeds all artifacts into a single self-contained `proofpack.json`. Each artifac
 
 ```json
 {
-  "schemaVersion": "4.2",
+  "schemaVersion": "4.6",
   "runId": "signum-2026-03-04-abc123",
   "decision": "AUTO_OK",
   "confidence": { "overall": 92 },
@@ -147,10 +147,10 @@ All artifacts are written to `.signum/` (auto-added to `.gitignore`):
 | `reviews/*.json` | AUDIT | Per-provider findings (specialized templates) |
 | `audit_summary.json` | AUDIT | Verdict with confidence scores |
 | `proofpack.json` | PACK | Final CI-gate artifact |
-| `iterations/NN/` | AUDIT | Per-iteration snapshots (v4.2+, only when iterative) |
-| `audit_iteration_log.json` | AUDIT | Summary of all iterations (v4.2+) |
-| `repair_brief.json` | AUDIT | Current repair brief for engineer (v4.2+) |
-| `flaky_tests.json` | AUDIT | Flaky test tracker (v4.2+, run-local) |
+| `iterations/NN/` | AUDIT | Per-iteration snapshots (v4.6+, only when iterative) |
+| `audit_iteration_log.json` | AUDIT | Summary of all iterations (v4.6+) |
+| `repair_brief.json` | AUDIT | Current repair brief for engineer (v4.6+) |
+| `flaky_tests.json` | AUDIT | Flaky test tracker (v4.6+, run-local) |
 
 ## Cost Estimates
 
@@ -182,5 +182,5 @@ No telemetry. No analytics. No phone-home.
 - **200K context limit**: Very large diffs (>10K lines) may exceed model context windows. The contract + diff must fit within 200K tokens.
 - **Heuristic risk**: Risk level is computed from file count and keyword patterns, not semantic analysis. It can under-estimate novel refactors.
 - **Finding validation**: Catches hallucinated file paths and line ranges, but cannot verify logical correctness of a finding's claim.
-- **Iterative cost**: With iterative AUDIT (v4.2), high-risk tasks may run multiple review cycles. Cost scales with iterations used. Early stop limits waste but does not eliminate it.
-- **Flaky test handling**: Per-test retry is pytest-only in v4.2. Other runners use suite-level detection.
+- **Iterative cost**: With iterative AUDIT (v4.6), high-risk tasks may run multiple review cycles. Cost scales with iterations used. Early stop limits waste but does not eliminate it.
+- **Flaky test handling**: Per-test retry is pytest-only in v4.6. Other runners use suite-level detection.

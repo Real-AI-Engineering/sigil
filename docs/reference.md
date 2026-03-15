@@ -113,7 +113,8 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"3.0"` | Always "3.0" |
+| `schemaVersion` | `"3.0"`–`"3.6"` | Schema version |
+| `glossaryVersion` | string | Version from `project.glossary.json` at contract creation time (optional, omitted when file absent) |
 | `goal` | string | What to build (min 10 chars) |
 | `inScope` | string[] | Items in scope (min 1) |
 | `allowNewFilesUnder` | string[] | Directories where new files may be created (optional) |
@@ -123,8 +124,80 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `riskLevel` | `low\|medium\|high` | Deterministic risk assessment |
 | `riskSignals` | string[] | Why risk level was assigned |
 | `openQuestions` | string[] | Must be empty to proceed |
+| `contextInheritance` | object | Project context references (optional) |
+| `contextInheritance.projectRef` | string\|null | Path to project.intent.md, "not_found", null (waiver), or absent (legacy) |
+| `contextInheritance.projectIntentSha256` | string | SHA-256 of project.intent.md at contract creation |
+| `contextInheritance.contextSnapshotHash` | string | SHA-256 hex digest over concatenated byte contents of all `staleIfChanged` files in array order, computed at contract creation time |
+| `contextInheritance.staleIfChanged` | string[] | Upstream artifact paths tracked for staleness; at minimum includes `project.intent.md` when loaded |
+| `contextInheritance.stalenessStatus` | `"fresh"\|"warning"\|"stale"` | Current staleness state: fresh=hash matches, warning=soft mismatch, stale=hash differs and policy=block |
+| `contextInheritance.stalenessPolicy` | `"block"\|"warn"` | Action when upstream hash differs: block=halt pipeline (BLOCK), warn=continue with warning (default: `"warn"`) |
+| `dependsOnContractIds` | string[] | ContractIds that must complete before this contract executes (user-declared, optional) |
+| `supersedesContractIds` | string[] | ContractIds this contract replaces (user-declared, optional) |
+| `supersededByContractId` | string | ContractId of the contract that replaces this one (optional) |
+| `interfacesTouched` | string[] | Named interfaces, APIs, or module boundaries this contract modifies (optional) |
 
-### Iterative AUDIT (v4.2+)
+### project.glossary.json schema
+
+Optional file at `PROJECT_ROOT/project.glossary.json`. When present, contractor reads it and sets `glossaryVersion` in the contract.
+
+```json
+{
+  "version": "1.0.0",
+  "canonicalTerms": ["term1", "term2", "..."],
+  "aliases": {
+    "forbidden-synonym": "canonical-term",
+    "another-synonym": "another-canonical"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Glossary version string (mirrors `glossaryVersion` in contract) |
+| `canonicalTerms` | string[] | Approved terminology for this project |
+| `aliases` | object | Map of forbidden synonyms to their canonical replacements |
+
+#### upstream_staleness_check
+
+Runs during Phase 1 spec quality gate (after the `adr_relevance_check`). Skipped when `contextInheritance.staleIfChanged` is absent or empty.
+
+When `staleIfChanged` is a non-empty array, the check always executes:
+
+1. Concatenates the byte contents of all files listed in `staleIfChanged` (in array order)
+2. Computes SHA-256 of the concatenated bytes
+3. Compares the result to `contextInheritance.contextSnapshotHash`
+
+Outcome depends on `contextInheritance.stalenessPolicy` (default `"warn"`):
+
+| Hash result | Policy | Outcome |
+|-------------|--------|---------|
+| Matches | any | `fresh` — pipeline continues |
+| Differs | `"warn"` | `warning` — WARN emitted, pipeline continues |
+| Differs | `"block"` | `stale` — BLOCK emitted, pipeline stops; re-run Contractor to refresh |
+
+`contextInheritance.stalenessStatus` is updated in-place in `contract.json` after the check.
+
+#### glossary_check
+
+Runs during Phase 1 spec quality gate (Step 1.3.5). Scans the contract's `goal`, `inScope` items, and AC `description` fields for any term appearing in the `aliases` map (case-insensitive whole-word match). Emits a `WARN` line for each match with the forbidden term and its canonical replacement. Results are written to `glossary_warnings` in `spec_quality.json`. This check is **non-blocking** — it never fails the pipeline or reduces the numeric spec quality score.
+
+#### terminology_consistency_check
+
+Runs during Phase 1 spec quality gate (Step 1.3.5) after `glossary_check`. Reads `.signum/contracts/index.json`, extracts goal text from active contracts, and scans for synonym proliferation (same concept appearing under two different terms across contracts). Emits `WARN` lines on synonym proliferation. When `.signum/contracts/index.json` is absent or contains no contracts with active status, the check outputs a skip message and does not block or fail. This check is **non-blocking**.
+
+#### cross_contract_overlap_check
+
+Runs during Phase 1 spec quality gate. Reads `.signum/contracts/index.json`, compares the new contract's `inScope` against active contracts' `inScope` arrays. Emits `WARN` when files overlap with another active contract, listing the overlapping files and the conflicting contract ID. Skips gracefully when index is absent or has no active contracts. **Non-blocking.**
+
+#### assumption_contradiction_check
+
+Runs during Phase 1 spec quality gate after `cross_contract_overlap_check`. Reads assumptions from the new contract and compares against assumptions of active contracts in `index.json`. Emits `WARN` when assumption text contains contradictory terms (e.g., one contract assumes "X is true" while another assumes "X is false"). **Non-blocking.**
+
+#### adr_relevance_check
+
+Runs during Phase 1 spec quality gate. Scans for `docs/adr/` or `docs/decisions/` directories. If ADR files exist and the contract's `inScope` touches paths that match ADR file globs, emits `WARN` suggesting the contract reference relevant ADRs. Skips when no ADR directories exist. **Non-blocking.**
+
+### Iterative AUDIT (v4.6+)
 
 When AUDIT finds MAJOR or CRITICAL issues, it enters an iterative repair loop:
 
@@ -141,11 +214,11 @@ Iteration artifacts are stored in `.signum/iterations/01/`, `.signum/iterations/
 
 The proofpack includes an `iterativeAudit` section when >1 iteration was used, with per-iteration summaries, resolved/remaining findings, and the best iteration number.
 
-### proofpack.json fields (v4.2)
+### proofpack.json fields (v4.6)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"4.2"` | Schema version (v4.2 adds iterativeAudit, ciContext, baselineComparison, contractSource) |
+| `schemaVersion` | `"4.6"` | Schema version (v4.6 adds iterativeAudit, ciContext, baselineComparison, contractSource) |
 | `signumVersion` | string | Signum version that generated this proofpack |
 | `createdAt` | string | ISO 8601 timestamp of proofpack creation |
 | `runId` | string | `signum-YYYY-MM-DD-XXXXXX` |
@@ -161,7 +234,7 @@ The proofpack includes an `iterativeAudit` section when >1 iteration was used, w
 | `checks.holdout` | envelope | Holdout scenario pass/fail (if applicable) |
 | `checks.reviews.*` | envelope | Per-provider review (dynamic keys) |
 | `checks.auditSummary` | envelope | Synthesized decision with confidence |
-| `iterativeAudit` | object | Iteration metadata (v4.2+, present only when >1 iteration) |
+| `iterativeAudit` | object | Iteration metadata (v4.6+, present only when >1 iteration) |
 | `iterativeAudit.iterationsUsed` | integer | Total iterations run |
 | `iterativeAudit.bestIteration` | integer | Iteration with best score |
 | `iterativeAudit.auditIterations` | array | Per-iteration summaries (score, findings count, decision) |

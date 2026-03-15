@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "canonicalTerms": [
+    "acceptance criterion",
+    "contract",
+    "engineer",
+    "spec quality",
+    "proofpack",
+    "scope gate"
+  ],
+  "aliases": {
+    "acceptance criteria": "acceptance criterion",
+    "design doc": "contract",
+    "developer": "engineer",
+    "spec score": "spec quality",
+    "evidence bundle": "proofpack",
+    "boundary check": "scope gate"
+  }
+}

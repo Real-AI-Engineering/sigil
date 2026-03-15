@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "3.2",
+  "contractId": "prose-test-quantifiers",
+  "goal": "Build a service that handles several request types and processes many concurrent connections.",
+  "inScope": ["src/service.js"],
+  "acceptanceCriteria": [
+    {
+      "id": "AC01",
+      "description": "The service must support few simultaneous users"
+    },
+    {
+      "id": "AC02",
+      "description": "Returns a number of results per page"
+    }
+  ],
+  "riskLevel": "low",
+  "assumptions": [],
+  "outOfScope": [],
+  "openQuestions": [],
+  "requiredInputsProvided": true
+}

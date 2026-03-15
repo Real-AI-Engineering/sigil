@@ -1,0 +1,12 @@
+{
+  "_comment": "Documents pass threshold: pass=true when total_findings <= 3, pass=false when total_findings > 3",
+  "threshold": 3,
+  "rule": "pass = (total_findings <= threshold)",
+  "examples": [
+    { "total_findings": 0, "pass": true },
+    { "total_findings": 1, "pass": true },
+    { "total_findings": 3, "pass": true },
+    { "total_findings": 4, "pass": false },
+    { "total_findings": 10, "pass": false }
+  ]
+}

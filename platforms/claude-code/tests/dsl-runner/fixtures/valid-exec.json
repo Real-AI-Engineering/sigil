@@ -1,0 +1,1 @@
+{"steps":[{"exec":{"argv":["test","-f","README.md"]}}],"timeout_ms":5000}

@@ -1,0 +1,48 @@
+# Signum
+
+> Evidence-driven development pipeline with multi-model code review. Transforms feature requests into verified code changes with cryptographic proof.
+
+## Overview
+
+Signum is a Claude Code plugin that runs a 4-phase pipeline: CONTRACT, EXECUTE, AUDIT, PACK. It generates a verifiable contract from a task description, implements code autonomously with a repair loop, audits the change with up to 3 independent AI models (Claude, Codex, Gemini), and packages all evidence into a self-contained proofpack.
+
+## Pipeline Phases
+
+CONTRACT: Transforms user request into a JSON contract with goal, acceptance criteria, holdout scenarios, risk level, and scope boundaries. Includes spec quality scoring (7 dimensions, /115), prose checks, optional multi-model spec validation, and Clover reconstruction test.
+
+EXECUTE: Engineer agent implements code against the contract. Repair loop retries up to 3 times on check failures. Captures baseline before changes for regression detection. Validates scope and policy compliance.
+
+AUDIT: Mechanic runs deterministic checks (lint, typecheck, tests) and compares with baseline. Holdout scenarios validate hidden acceptance criteria. Up to 3 independent AI reviews (Claude semantic, Codex security, Gemini performance). Synthesizer combines all signals into a consensus decision.
+
+PACK: Bundles contract, diff, baseline, reviews, mechanic report, holdout report, and audit summary into a single proofpack.json with SHA-256 envelope chain.
+
+## Key Concepts
+
+- Contract: JSON spec with goal, inScope files, acceptanceCriteria (with verify commands), holdoutScenarios (hidden tests), riskLevel, and invariants
+- Proofpack: Self-contained evidence bundle (schema v4.1) with embedded artifacts, audit chain, and decision enum
+- Risk-proportional ceremony: Low risk uses Claude-only review; medium adds holdouts + 2-model; high uses full 3-model panel
+- Holdout scenarios: Blind acceptance criteria not shown to the Engineer, validated after implementation
+- Baseline comparison: All checks run before and after changes to detect regressions vs pre-existing failures
+
+## Decision Outcomes
+
+AUTO_OK: All checks pass, all reviewers approve, no regressions, holdouts pass. Safe to merge.
+AUTO_BLOCK: Regressions detected, reviewer rejected, or critical findings. Do not merge.
+HUMAN_REVIEW: Disagreements, conditional verdicts, or insufficient review coverage. Manual review needed.
+
+## Usage
+
+```
+/signum <task description>
+```
+
+## Files
+
+- commands/signum.md — Main orchestrator (skill definition)
+- agents/contractor.md — Contract generation agent
+- agents/engineer.md — Code implementation agent
+- agents/synthesizer.md — Review synthesis agent
+- agents/reviewer-claude.md — Claude semantic reviewer
+- lib/signum-ci.sh — CI wrapper script
+- lib/schemas/contract.schema.json — Contract JSON schema
+- lib/schemas/proofpack.schema.json — Proofpack JSON schema

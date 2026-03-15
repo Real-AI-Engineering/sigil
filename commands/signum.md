@@ -10,7 +10,7 @@ arguments:
     required: false
 ---
 
-# Signum v4.2: Evidence-Driven Development Pipeline
+# Signum v4.6: Evidence-Driven Development Pipeline
 
 You are the Signum orchestrator. You drive a 4-phase evidence-driven pipeline:
 
@@ -27,12 +27,12 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
 ```json
 {
   "name": "Signum",
-  "version": "4.2.0",
+  "version": "4.6.0",
   "pipeline": ["CONTRACT", "EXECUTE", "AUDIT", "PACK"],
   "phases": {
     "CONTRACT": {
       "description": "Transform request into verifiable JSON contract",
-      "steps": ["contractor agent", "spec quality gate (7 dimensions)", "prose checks", "multi-model spec validation", "clover reconstruction test", "human approval"],
+      "steps": ["contractor agent", "spec quality gate (7 dimensions)", "prose checks", "intent alignment check", "multi-model spec validation", "clover reconstruction test", "human approval"],
       "duration": "~30s",
       "approvals": 1
     },
@@ -114,6 +114,7 @@ rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json"
       "${DIR}spec_validation.json" "${DIR}clover_report.json" \
       "${DIR}contract-hash.txt" "${DIR}execution_context.json" \
       "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" \
+      "${DIR}intent_check.json" \
       "${DIR}audit_iteration_log.json" "${DIR}repair_brief.json" "${DIR}flaky_tests.json" 2>/dev/null || true
 
 # Update status in index.json
@@ -364,6 +365,7 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch \
        .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
        .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt \
        .signum/clover_report.json .signum/approval.json \
+       .signum/intent_check.json \
        .signum/audit_iteration_log.json .signum/flaky_tests.json .signum/repair_brief.json
 rm -rf .signum/iterations/
 ```
@@ -610,7 +612,8 @@ Use the Bash tool to run the prose quality gate on the contract. This check is *
 ```bash
 PROSE_REPORT=""
 if [ -f lib/prose-check.sh ]; then
-  PROSE_REPORT=$(lib/prose-check.sh .signum/contract.json 2>/dev/null || echo '{}')
+  GLOSSARY_PATH="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+  PROSE_REPORT=$(lib/prose-check.sh .signum/contract.json "$GLOSSARY_PATH" 2>/dev/null || echo '{}')
   PROSE_TOTAL=$(echo "$PROSE_REPORT" | jq '.total_findings // 0')
   PROSE_PASS=$(echo "$PROSE_REPORT" | jq -r '.pass // "true"')
   echo "Prose quality: $PROSE_TOTAL finding(s), pass=$PROSE_PASS"
@@ -623,6 +626,451 @@ if [ -f lib/prose-check.sh ]; then
   fi
 fi
 ```
+
+#### Glossary check (glossary_check — informational, non-blocking)
+
+Run the glossary_check: scan goal, inScope items, and AC descriptions for forbidden synonyms from `project.glossary.json` aliases. This check is **non-blocking** — it never fails the pipeline or reduces the numeric spec quality score. Warnings are written only to `glossary_warnings` in `spec_quality.json`.
+
+```bash
+GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+if [ -f "$GLOSSARY_FILE" ]; then
+  GLOSSARY_VERSION=$(jq -r '.version // ""' "$GLOSSARY_FILE")
+  GLOSSARY_TERMS=$(jq -r '.canonicalTerms | length' "$GLOSSARY_FILE")
+  echo "Glossary: loaded (version $GLOSSARY_VERSION, $GLOSSARY_TERMS terms)"
+
+  # Build text to scan: goal + inScope items + AC descriptions
+  SCAN_TEXT=$(jq -r '
+    .goal,
+    (.inScope // [] | .[]),
+    (.acceptanceCriteria // [] | .[].description)
+  ' .signum/contract.json | tr '\n' ' ')
+
+  # Read aliases map and scan for forbidden synonyms
+  GLOSSARY_WARNS=$(jq -r '.aliases | to_entries[] | .key + "|" + .value' "$GLOSSARY_FILE" | \
+  while IFS='|' read -r synonym canonical; do
+    [ -z "$synonym" ] && continue
+    matched=$(echo "$SCAN_TEXT" | grep -Foiw -- "$synonym" 2>/dev/null | head -1 || true)
+    if [ -n "$matched" ]; then
+      jq -n --arg term "$matched" --arg canonical "$canonical" \
+        '{"term": $term, "canonical": $canonical, "message": ("WARN: use canonical term \"" + $canonical + "\" instead of synonym \"" + $term + "\"")}'
+    fi
+  done | jq -s '.')
+
+  WARN_COUNT=$(echo "$GLOSSARY_WARNS" | jq 'length')
+  if [ "$WARN_COUNT" -gt 0 ]; then
+    echo "Glossary check: $WARN_COUNT forbidden synonym(s) found (WARN only)"
+    echo "$GLOSSARY_WARNS" | jq -r '.[] | "  WARN: use canonical term \"" + .canonical + "\" instead of synonym \"" + .term + "\""'
+  else
+    echo "Glossary check: no forbidden synonyms found"
+  fi
+
+  # Write glossary_warnings into spec_quality.json (non-blocking, does not affect score)
+  if [ -f .signum/spec_quality.json ]; then
+    jq --argjson warns "$GLOSSARY_WARNS" \
+       --arg gver "$GLOSSARY_VERSION" \
+       --argjson gterms "$GLOSSARY_TERMS" \
+      '. + {glossary_warnings: $warns, glossary_version: $gver, glossary_terms: $gterms}' \
+      .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+      && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+else
+  echo "Glossary: not found (skipping glossary_check)"
+fi
+```
+
+#### Terminology consistency check (terminology_consistency_check — informational, non-blocking)
+
+Run the terminology_consistency_check: read `.signum/contracts/index.json`, extract goal text from active contracts, and emit WARN on synonym proliferation (same concept appearing under two different terms across contracts). This check is **non-blocking**.
+
+```bash
+INDEX_FILE=".signum/contracts/index.json"
+if [ ! -f "$INDEX_FILE" ]; then
+  echo "terminology_consistency_check: skipped (no contracts index found)"
+else
+  ACTIVE_GOALS=$(jq -r '
+    (.contracts // []) |
+    map(select(.status == "active")) |
+    if length == 0 then empty
+    else .[].goal // empty
+    end
+  ' "$INDEX_FILE" 2>/dev/null || true)
+
+  if [ -z "$ACTIVE_GOALS" ]; then
+    echo "terminology_consistency_check: no contracts with active status — skipped"
+  else
+    ALL_GOALS=$(echo "$ACTIVE_GOALS" | tr '\n' ' ')
+    GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+    # Check for synonym proliferation using the built-in synonym pairs
+    _tc_check() {
+      local a="$1" b="$2"
+      local has_a has_b
+      has_a=$(echo "$ALL_GOALS" | grep -ciw "$a" 2>/dev/null || echo 0)
+      has_b=$(echo "$ALL_GOALS" | grep -ciw "$b" 2>/dev/null || echo 0)
+      if [ "$has_a" -gt 0 ] && [ "$has_b" -gt 0 ]; then
+        echo "WARN: synonym proliferation detected — '$a' and '$b' used for the same concept across active contracts"
+      fi
+    }
+    _tc_check "endpoint" "route"
+    _tc_check "function" "method"
+    _tc_check "test" "spec"
+    _tc_check "error" "exception"
+    _tc_check "config" "configuration"
+    _tc_check "config" "settings"
+    _tc_check "user" "client"
+    _tc_check "file" "document"
+
+    # If project.glossary.json is present, also check glossary aliases across active contracts
+    if [ -f "$GLOSSARY_FILE" ]; then
+      jq -r '.aliases | to_entries[] | .key + "|" + .value' "$GLOSSARY_FILE" | \
+      while IFS='|' read -r synonym canonical; do
+        [ -z "$synonym" ] && continue
+        has_syn=$(echo "$ALL_GOALS" | grep -Fciw -- "$synonym" 2>/dev/null || echo 0)
+        has_can=$(echo "$ALL_GOALS" | grep -Fciw -- "$canonical" 2>/dev/null || echo 0)
+        if [ "$has_syn" -gt 0 ] && [ "$has_can" -gt 0 ]; then
+          echo "WARN: synonym proliferation detected — glossary synonym '$synonym' and canonical '$canonical' both appear in active contract goals"
+        fi
+      done
+    fi
+    echo "terminology_consistency_check: complete"
+  fi
+fi
+```
+
+#### Cross-contract overlap check (cross_contract_overlap_check — informational, non-blocking)
+
+Run the cross_contract_overlap_check: read `.signum/contracts/index.json`, compare inScope arrays of active contracts against the new contract's inScope, and emit overlap warnings. This check is **non-blocking** — it never fails the pipeline or reduces the numeric spec quality score. Warnings are written only to `overlap_warnings` in `spec_quality.json`.
+
+```bash
+INDEX_FILE=".signum/contracts/index.json"
+if [ ! -f "$INDEX_FILE" ]; then
+  echo "cross_contract_overlap_check: skipped (no contracts index found)"
+else
+  NEW_CONTRACT_ID=$(jq -r '.contractId // ""' .signum/contract.json)
+  ACTIVE_CONTRACTS=$(jq -c '
+    (.contracts // []) |
+    map(select(.status == "active"))
+  ' "$INDEX_FILE" 2>/dev/null || echo "[]")
+  ACTIVE_COUNT=$(echo "$ACTIVE_CONTRACTS" | jq 'length')
+
+  if [ "$ACTIVE_COUNT" -eq 0 ]; then
+    echo "cross_contract_overlap_check: no active contracts in index — skipped"
+    OVERLAP_WARNS="[]"
+  else
+    NEW_INSCOPE=$(jq -c '.inScope // []' .signum/contract.json)
+    OVERLAP_WARNS=$(echo "$ACTIVE_CONTRACTS" | jq -c --argjson new_scope "$NEW_INSCOPE" --arg self_id "$NEW_CONTRACT_ID" '
+      [.[] |
+        select(.contractId != $self_id) |
+        . as $other |
+        ($other.inScope // []) as $other_scope |
+        ($new_scope | map(select(. as $f | $other_scope | index($f) != null))) as $overlaps |
+        select($overlaps | length > 0) |
+        {
+          contractId: $other.contractId,
+          overlappingFiles: $overlaps,
+          message: ("WARN: inScope overlap with active contract " + $other.contractId + " on files: " + ($overlaps | join(", ")))
+        }
+      ]
+    ' 2>/dev/null || echo "[]")
+
+    OVERLAP_COUNT=$(echo "$OVERLAP_WARNS" | jq 'length')
+    if [ "$OVERLAP_COUNT" -gt 0 ]; then
+      echo "cross_contract_overlap_check: $OVERLAP_COUNT overlapping active contract(s) found (WARN only)"
+      echo "$OVERLAP_WARNS" | jq -r '.[] | "  WARN: " + .message'
+    else
+      echo "cross_contract_overlap_check: no inScope overlaps found"
+    fi
+  fi
+
+  # Write overlap_warnings into spec_quality.json (non-blocking, does not affect score)
+  if [ -f .signum/spec_quality.json ]; then
+    jq --argjson warns "${OVERLAP_WARNS:-[]}" \
+      '. + {overlap_warnings: $warns}' \
+      .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+      && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+fi
+```
+
+#### Assumption contradiction check (assumption_contradiction_check — informational, non-blocking)
+
+Run the assumption_contradiction_check: read assumptions from each related contract in index.json (parentContractId, relatedContractIds), compare assumption text pairs for direct contradiction keywords, and emit contradiction warnings. This check is **non-blocking** — it does not block the pipeline.
+
+```bash
+INDEX_FILE=".signum/contracts/index.json"
+PARENT_ID=$(jq -r '.parentContractId // ""' .signum/contract.json)
+RELATED_IDS=$(jq -r '(.relatedContractIds // []) | .[]' .signum/contract.json 2>/dev/null || true)
+NEW_ASSUMPTIONS=$(jq -r '(.assumptions // []) | .[].text' .signum/contract.json 2>/dev/null || true)
+
+if [ ! -f "$INDEX_FILE" ] || ( [ -z "$PARENT_ID" ] && [ -z "$RELATED_IDS" ] ); then
+  echo "assumption_contradiction_check: no related contracts — skipped"
+  ASSUMPTION_WARNS="[]"
+else
+  ALL_RELATED_IDS="$PARENT_ID $RELATED_IDS"
+  CONTRADICTION_WARNS="[]"
+  for REL_ID in $ALL_RELATED_IDS; do
+    [ -z "$REL_ID" ] && continue
+    REL_ASSUMPTIONS=$(jq -r --arg id "$REL_ID" \
+      '(.contracts // []) | map(select(.contractId == $id)) | .[0].assumptions // [] | .[].text' \
+      "$INDEX_FILE" 2>/dev/null || true)
+    [ -z "$REL_ASSUMPTIONS" ] && continue
+
+    while IFS= read -r rel_text; do
+      [ -z "$rel_text" ] && continue
+      while IFS= read -r new_text; do
+        [ -z "$new_text" ] && continue
+        # Check for direct contradiction keywords: "must not X" vs "must X", "never X" vs "always X",
+        # "no X" in one and "X required" in another
+        CONTR=0
+        pos_word=$(echo "$new_text" | grep -oiE "\bmust [a-z]+\b" | grep -viE "must not" | head -1 || true)
+        if [ -n "$pos_word" ]; then
+          verb=$(echo "$pos_word" | awk '{print $2}')
+          echo "$rel_text" | grep -Fqi "must not $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "never $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "prevent $verb" && CONTR=1 || true
+        fi
+        neg_word=$(echo "$new_text" | grep -oiE "\bmust not [a-z]+\b|\bnever [a-z]+\b" | head -1 || true)
+        if [ -n "$neg_word" ]; then
+          verb=$(echo "$neg_word" | awk '{print $NF}')
+          echo "$rel_text" | grep -Fqi "must $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "always $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "require $verb" && CONTR=1 || true
+        fi
+        if [ "$CONTR" -eq 1 ]; then
+          WARN_ENTRY=$(jq -n --arg rel "$REL_ID" --arg a1 "$new_text" --arg a2 "$rel_text" \
+            '{"contractId": $rel, "assumption1": $a1, "assumption2": $a2,
+              "message": ("WARN: possible assumption contradiction between current contract and " + $rel)}')
+          CONTRADICTION_WARNS=$(echo "$CONTRADICTION_WARNS" | jq --argjson w "$WARN_ENTRY" '. + [$w]')
+        fi
+      done <<< "$NEW_ASSUMPTIONS"
+    done <<< "$REL_ASSUMPTIONS"
+  done
+  ASSUMPTION_WARNS="$CONTRADICTION_WARNS"
+
+  WARN_COUNT=$(echo "$ASSUMPTION_WARNS" | jq 'length')
+  if [ "$WARN_COUNT" -gt 0 ]; then
+    echo "assumption_contradiction_check: $WARN_COUNT contradiction(s) found (WARN only)"
+    echo "$ASSUMPTION_WARNS" | jq -r '.[] | "  " + .message'
+  else
+    echo "assumption_contradiction_check: no contradictions found"
+  fi
+fi
+
+# Write assumption_warnings into spec_quality.json (non-blocking, does not affect score)
+if [ -f .signum/spec_quality.json ]; then
+  jq --argjson warns "${ASSUMPTION_WARNS:-[]}" \
+    '. + {assumption_warnings: $warns}' \
+    .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+    && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+fi
+```
+
+#### ADR relevance check (adr_relevance_check — informational, non-blocking)
+
+Run the adr_relevance_check: scan `docs/adr/` and `docs/decisions/` for `*.md` files, match their filenames against inScope paths using glob-style prefix matching, and emit a WARN when relevant ADRs exist but the contract's `adrRefs` field is absent or empty. This check is **non-blocking** and degrades gracefully to a no-op when neither directory exists.
+
+```bash
+ADR_DIR_1=""; ADR_DIR_2=""
+if [ -d "${PROJECT_ROOT:-$PWD}/docs/adr" ]; then
+  ADR_DIR_1="${PROJECT_ROOT:-$PWD}/docs/adr"
+fi
+if [ -d "${PROJECT_ROOT:-$PWD}/docs/decisions" ]; then
+  ADR_DIR_2="${PROJECT_ROOT:-$PWD}/docs/decisions"
+fi
+
+if [ -z "$ADR_DIR_1" ] && [ -z "$ADR_DIR_2" ]; then
+  echo "adr_relevance_check: no docs/adr or docs/decisions directory found — skipped"
+  ADR_WARNS="[]"
+else
+  ADR_FIND_ARGS=()
+  [ -n "$ADR_DIR_1" ] && ADR_FIND_ARGS+=("$ADR_DIR_1")
+  [ -n "$ADR_DIR_2" ] && ADR_FIND_ARGS+=("$ADR_DIR_2")
+  ADR_FILES=$(find "${ADR_FIND_ARGS[@]}" -maxdepth 1 -name "*.md" 2>/dev/null | sort || true)
+  if [ -z "$ADR_FILES" ]; then
+    echo "adr_relevance_check: no ADR files found — skipped"
+    ADR_WARNS="[]"
+  else
+    INSCOPE_LIST=$(jq -r '.inScope // [] | .[]' .signum/contract.json 2>/dev/null || true)
+    ADR_REFS=$(jq -r '(.adrRefs // []) | length' .signum/contract.json 2>/dev/null || echo 0)
+    RELEVANT_ADRS=""
+    while IFS= read -r adr_file; do
+      [ -z "$adr_file" ] && continue
+      adr_base=$(basename "$adr_file" .md)
+      while IFS= read -r scope_path; do
+        [ -z "$scope_path" ] && continue
+        scope_base=$(basename "$scope_path" | sed 's/\.[^.]*$//')
+        # Fixed-string match: ADR name appears in scope path or vice versa
+        if echo "$scope_base" | grep -Fqi -- "$adr_base" 2>/dev/null || \
+           echo "$adr_base" | grep -Fqi -- "$scope_base" 2>/dev/null || \
+           echo "$scope_path" | grep -Fqi -- "$adr_base" 2>/dev/null; then
+          RELEVANT_ADRS="$RELEVANT_ADRS $adr_file"
+          break
+        fi
+      done <<< "$INSCOPE_LIST"
+    done <<< "$ADR_FILES"
+
+    if [ -n "$RELEVANT_ADRS" ] && [ "$ADR_REFS" -eq 0 ]; then
+      ADR_WARNS=$(jq -n --arg files "$(echo $RELEVANT_ADRS | tr ' ' '\n' | sort -u | tr '\n' ' ')" \
+        '[{"message": ("WARN: relevant ADR(s) found but adrRefs field is absent or empty: " + $files)}]')
+      echo "adr_relevance_check: relevant ADRs found but adrRefs is empty (WARN only)"
+      echo "$RELEVANT_ADRS" | tr ' ' '\n' | sort -u | while read -r f; do [ -n "$f" ] && echo "  WARN: consider referencing ADR: $f"; done
+    else
+      echo "adr_relevance_check: OK (relevant ADRs referenced or none found)"
+      ADR_WARNS="[]"
+    fi
+  fi
+fi
+
+# Write adr_warnings into spec_quality.json (non-blocking, does not affect score)
+if [ -f .signum/spec_quality.json ]; then
+  jq --argjson warns "${ADR_WARNS:-[]}" \
+    '. + {adr_warnings: $warns}' \
+    .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+    && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+fi
+```
+
+#### Upstream staleness check (upstream_staleness_check — blocking when stalenessPolicy is "block")
+
+Run the upstream_staleness_check: recompute SHA-256 over all files listed in `contextInheritance.staleIfChanged`, compare to `contextInheritance.contextSnapshotHash`, and emit BLOCK or WARN when the hash differs. This check is **skipped** when `staleIfChanged` is absent or empty.
+
+```bash
+STALE_FILES=$(jq -r '(.contextInheritance.staleIfChanged // []) | .[]' .signum/contract.json 2>/dev/null || true)
+STALE_COUNT=$(jq '(.contextInheritance.staleIfChanged // []) | length' .signum/contract.json 2>/dev/null || echo 0)
+
+if [ "$STALE_COUNT" -eq 0 ] || [ -z "$STALE_FILES" ]; then
+  echo "upstream_staleness_check: skipped (staleIfChanged is absent or empty)"
+else
+  STORED_HASH=$(jq -r '.contextInheritance.contextSnapshotHash // ""' .signum/contract.json)
+  STALENESS_POLICY=$(jq -r '.contextInheritance.stalenessPolicy // "warn"' .signum/contract.json)
+
+  if [ -z "$STORED_HASH" ]; then
+    echo "upstream_staleness_check: skipped (contextSnapshotHash not set)"
+  else
+    # Recompute SHA-256 over concatenated contents of all staleIfChanged files (in array order)
+    TMPFILE=$(mktemp "${TMPDIR:-/tmp}/signum-staleness.XXXXXX")
+    MISSING_FILES=""
+    TRAVERSAL_REJECTED=""
+    while IFS= read -r sf; do
+      [ -z "$sf" ] && continue
+      # Reject path traversal
+      case "$sf" in
+        *../*|../*|*/..) TRAVERSAL_REJECTED="$TRAVERSAL_REJECTED $sf"; continue ;;
+      esac
+      RESOLVED_PATH="${PROJECT_ROOT:-$PWD}/$sf"
+      if [ -f "$RESOLVED_PATH" ]; then
+        cat "$RESOLVED_PATH" >> "$TMPFILE"
+      else
+        MISSING_FILES="$MISSING_FILES $sf"
+      fi
+    done <<< "$STALE_FILES"
+
+    if [ -n "$TRAVERSAL_REJECTED" ]; then
+      echo "upstream_staleness_check: BLOCK — path traversal rejected:$TRAVERSAL_REJECTED"
+      rm -f "$TMPFILE"
+      exit 1
+    fi
+
+    if [ -n "$MISSING_FILES" ]; then
+      echo "upstream_staleness_check: missing upstream files:$MISSING_FILES"
+      # Update stalenessStatus based on policy
+      if [ "$STALENESS_POLICY" = "block" ]; then
+        jq '.contextInheritance.stalenessStatus = "stale"' .signum/contract.json > .signum/contract.json.tmp \
+          && mv .signum/contract.json.tmp .signum/contract.json
+        echo "BLOCK: upstream files missing and stalenessPolicy=block."
+        rm -f "$TMPFILE"
+        exit 1
+      else
+        jq '.contextInheritance.stalenessStatus = "warning"' .signum/contract.json > .signum/contract.json.tmp \
+          && mv .signum/contract.json.tmp .signum/contract.json
+        echo "WARN: upstream files missing (stalenessPolicy=warn)."
+      fi
+      rm -f "$TMPFILE"
+    else
+      # Compute SHA-256 of concatenated content
+      if command -v sha256sum > /dev/null 2>&1; then
+        CURRENT_HASH=$(sha256sum "$TMPFILE" | awk '{print $1}')
+      else
+        CURRENT_HASH=$(shasum -a 256 "$TMPFILE" | awk '{print $1}')
+      fi
+      rm -f "$TMPFILE"
+
+      if [ "$CURRENT_HASH" = "$STORED_HASH" ]; then
+        echo "upstream_staleness_check: fresh (hash matches: ${STORED_HASH:0:16}...)"
+        # Update stalenessStatus to fresh in contract
+        jq '.contextInheritance.stalenessStatus = "fresh"' .signum/contract.json > .signum/contract.json.tmp \
+          && mv .signum/contract.json.tmp .signum/contract.json
+      else
+        echo "upstream_staleness_check: hash mismatch"
+        echo "  stored:  $STORED_HASH"
+        echo "  current: $CURRENT_HASH"
+        echo "  staleIfChanged files: $(echo "$STALE_FILES" | tr '\n' ' ')"
+
+        if [ "$STALENESS_POLICY" = "block" ]; then
+          # Update stalenessStatus to stale
+          jq '.contextInheritance.stalenessStatus = "stale"' .signum/contract.json > .signum/contract.json.tmp \
+            && mv .signum/contract.json.tmp .signum/contract.json
+          echo "BLOCK: upstream artifacts have changed since contract was created (stalenessPolicy=block)."
+          echo "Re-run the Contractor agent to refresh the contract against current upstream artifacts."
+          exit 1
+        else
+          # Update stalenessStatus to warning
+          jq '.contextInheritance.stalenessStatus = "warning"' .signum/contract.json > .signum/contract.json.tmp \
+            && mv .signum/contract.json.tmp .signum/contract.json
+          echo "WARN: upstream artifacts have changed since contract was created (stalenessPolicy=warn)."
+          echo "Consider re-running the Contractor agent to refresh the contract."
+        fi
+      fi
+    fi
+  fi
+fi
+```
+
+### Step 1.3.6: Intent alignment check (informational, medium/high risk only)
+
+**Skip if `riskLevel` is `low`.** Low-risk tasks don't benefit from LLM alignment checks.
+
+Check if contract has a project intent reference:
+
+```bash
+PROJECT_REF=$(jq -r '.contextInheritance.projectRef // "absent"' .signum/contract.json)
+RISK=$(jq -r '.riskLevel' .signum/contract.json)
+if [ "$RISK" = "low" ] || [ "$PROJECT_REF" = "absent" ] || [ "$PROJECT_REF" = "null" ] || [ "$PROJECT_REF" = "not_found" ]; then
+  echo "Intent alignment check: skipped (risk=$RISK, projectRef=$PROJECT_REF)"
+else
+  echo "Running intent alignment check against $PROJECT_REF..."
+fi
+```
+
+If not skipped, read project.intent.md and launch a sonnet subagent:
+
+```
+You are checking whether a task contract aligns with its project's stated intent.
+
+Project intent:
+<contents of project.intent.md from PROJECT_ROOT>
+
+Contract:
+Goal: <contract goal>
+Out of scope: <contract outOfScope>
+Acceptance criteria: <AC descriptions>
+
+Check:
+1. Does the contract goal relate to the project's stated goal or core capabilities?
+2. Does the contract scope overlap with any project non-goals?
+3. Does the contract use terminology inconsistent with the project glossary?
+
+Output JSON only:
+{
+  "aligned": true|false,
+  "concerns": ["<concern 1>", ...],
+  "glossary_violations": ["<used 'X' but glossary says use 'Y'>", ...]
+}
+```
+
+Parse the subagent response as JSON. If parsing fails, write safe default:
+`{"aligned": null, "concerns": [], "glossary_violations": [], "parse_error": true}`
+
+Write result to `.signum/intent_check.json`.
 
 ### Step 1.3.7: Multi-model spec validation (optional, if providers available)
 
@@ -845,6 +1293,56 @@ jq -r 'if .riskLevel == "high" then "Risk signals: " + (.riskSignals // [] | joi
   .signum/contract.json
 ```
 
+```bash
+# Show glossary status
+GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+if [ -f "$GLOSSARY_FILE" ]; then
+  GVER=$(jq -r '.version // "unknown"' "$GLOSSARY_FILE")
+  GTERMS=$(jq -r '.canonicalTerms | length' "$GLOSSARY_FILE")
+  echo "Glossary: loaded (version $GVER, $GTERMS terms)"
+else
+  echo "Glossary: not found"
+fi
+```
+
+```bash
+# Show project intent status
+if jq -e '.contextInheritance.projectRef' .signum/contract.json >/dev/null 2>&1; then
+  PROJECT_REF=$(jq -r '.contextInheritance.projectRef' .signum/contract.json)
+  if [ "$PROJECT_REF" = "not_found" ]; then
+    echo "Project intent: not found (low risk, continued)"
+  else
+    echo "Project intent: $PROJECT_REF (loaded)"
+  fi
+elif jq -e '.contextInheritance | has("projectRef")' .signum/contract.json >/dev/null 2>&1; then
+  echo "Project intent: waived by user"
+fi
+```
+
+```bash
+# Show intent alignment results
+INTENT_CHECK=".signum/intent_check.json"
+if [ -f "$INTENT_CHECK" ]; then
+  ALIGNED=$(jq -r '.aligned // "null"' "$INTENT_CHECK")
+  PARSE_ERR=$(jq -r '.parse_error // false' "$INTENT_CHECK")
+  CONCERNS=$(jq -r '.concerns | length' "$INTENT_CHECK")
+  if [ "$PARSE_ERR" = "true" ] || [ "$ALIGNED" = "null" ]; then
+    echo "Intent alignment: skipped (check failed)"
+  elif [ "$ALIGNED" = "false" ] || [ "$CONCERNS" -gt 0 ]; then
+    echo ""
+    echo "--- Intent alignment WARNING ---"
+    jq -r '.concerns[]' "$INTENT_CHECK" | sed 's/^/  - /'
+    GLOSSARY_V=$(jq -r '.glossary_violations | length' "$INTENT_CHECK")
+    if [ "$GLOSSARY_V" -gt 0 ]; then
+      echo "Glossary violations:"
+      jq -r '.glossary_violations[]' "$INTENT_CHECK" | sed 's/^/  - /'
+    fi
+  else
+    echo "Intent alignment: OK"
+  fi
+fi
+```
+
 **Present the following 5-item approval checklist to the user.** Display it as a numbered list and ask for a yes/no answer for each item:
 
 ```
@@ -938,7 +1436,8 @@ Use the Bash tool to create a contract stripped of holdout scenarios and holdout
 jq '{
   schemaVersion, contractId, status, timestamps, goal, inScope, allowNewFilesUnder, outOfScope,
   acceptanceCriteria: [.acceptanceCriteria[] | select(.visibility != "holdout")],
-  assumptions, openQuestions, riskLevel, riskSignals, requiredInputsProvided
+  assumptions, openQuestions, riskLevel, riskSignals, requiredInputsProvided,
+  contextInheritance
 } | with_entries(select(.value != null))' .signum/contract.json > .signum/contract-engineer.json
 
 # Generate holdout manifest for committed spec
@@ -2170,7 +2669,7 @@ Proceed to Phase 4: PACK.
 
 ## Phase 4: PACK
 
-**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.2) with embedded artifact contents.
+**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.6) with embedded artifact contents.
 
 ### Step 4.0: Transition contract status to completed
 
@@ -2399,8 +2898,8 @@ fi
 
 # Final assembly
 jq -n \
-  --arg schemaVersion "4.2" \
-  --arg signumVersion "4.2.0" \
+  --arg schemaVersion "4.6" \
+  --arg signumVersion "4.6.0" \
   --arg createdAt "$RUN_DATE" \
   --arg runId "$RUN_ID" \
   --arg contractId "$PACK_CONTRACT_ID" \
@@ -2458,7 +2957,7 @@ jq -n \
 # Cleanup temp files
 rm -f "$REDACTED_CONTRACT"
 
-echo "Proofpack written: $RUN_ID (schema v4.2)"
+echo "Proofpack written: $RUN_ID (schema v4.6)"
 ```
 
 ### Step 4.2: Update contract status

@@ -1,0 +1,1 @@
+{"steps":[{"exec":{"argv":["cat","README.md"]},"capture":"readme"},{"expect":{"stdout_contains":"Signum","source":"readme"}}],"timeout_ms":5000}

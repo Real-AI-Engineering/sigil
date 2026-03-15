@@ -1,6 +1,6 @@
 # Changelog
 
-## v4.2.0 (2026-03-15)
+## [4.6.0] - 2026-03-15
 
 ### Added
 - **Iterative AUDIT**: review-fix loop in Phase 3 — engineer fixes MAJOR/CRITICAL findings, full re-review each iteration until convergence or max iterations (default 20)
@@ -15,13 +15,65 @@
 - Holdout sanitization: engineer sees category only, never hidden test details
 - Flaky test retry (pytest-only): retry 2x before counting as regression
 - `flaky_tests.json` for run-local flaky test tracking
-- `iterativeAudit` section in proofpack schema (v4.2)
+- `iterativeAudit` section in proofpack schema (v4.6)
 
 ### Changed
-- Proofpack schema bumped to v4.2 (backward compatible with 4.0/4.1)
+- Proofpack schema bumped to v4.6 (backward compatible with 4.0–4.5)
 - Synthesizer is now iteration-aware: computes `iterationScore`, tracks findings across passes
 - Fresh-reviewer rule removed — Claude reviewer always uses Opus
 - Archive/restart cleanup includes iteration artifacts
+
+## [4.5.0] - 2026-03-15
+
+### Added
+- Contract schema v3.6: upstream staleness detection via four new optional fields inside `contextInheritance`:
+  - `contextSnapshotHash` (string) — SHA-256 hex digest over concatenated byte contents of `staleIfChanged` files in array order, computed at contract creation time
+  - `staleIfChanged` (string[]) — upstream artifact paths whose modification triggers staleness; at minimum includes `project.intent.md` when loaded
+  - `stalenessStatus` (enum: `fresh|warning|stale`) — current staleness state updated by the pipeline
+  - `stalenessPolicy` (enum: `block|warn`, default `warn`) — action when upstream hash differs
+- `upstream_staleness_check` step in Phase 1 CONTRACT (after `adr_relevance_check`): recomputes SHA-256 over `staleIfChanged` paths, compares to `contextSnapshotHash`, emits BLOCK when `stalenessPolicy=block` or WARN when `warn` if hash differs; skips when `staleIfChanged` is absent or empty
+- Contractor agent (Phase 4 upstream staleness tracking): automatically populates `staleIfChanged`, `contextSnapshotHash`, `stalenessStatus`, and `stalenessPolicy` at contract creation time when contextInheritance artifacts are loaded
+
+### Changed
+- Contract schema bumped to v3.6 (backward compatible with v3.0–v3.5)
+
+## [4.4.0] - 2026-03-15
+
+### Added
+- Contract schema v3.5: four new optional fields for cross-contract graph queries:
+  - `dependsOnContractIds` (string[]) — ordered dependency edges (user-declared)
+  - `supersedesContractIds` (string[]) — obsolescence edges (user-declared)
+  - `supersededByContractId` (string) — reverse obsolescence pointer
+  - `interfacesTouched` (string[]) — named interfaces/APIs touched by the contract
+- Phase 3 cross-contract coherence checks (all WARN-only, non-blocking):
+  - `cross_contract_overlap_check`: detects inScope file overlap with active contracts in index.json; writes `overlap_warnings` to `spec_quality.json`
+  - `assumption_contradiction_check`: compares assumption text pairs across related contracts for direct contradiction keywords; writes `assumption_warnings` to `spec_quality.json`
+  - `adr_relevance_check`: scans `docs/adr/` and `docs/decisions/` for relevant ADRs against inScope paths; warns when `adrRefs` is absent/empty; graceful no-op when directories absent; writes `adr_warnings` to `spec_quality.json`
+- Contractor agent documents all four new v3.5 fields with usage guidance
+
+### Changed
+- Contract schema bumped to v3.5 (backward compatible with v3.0–v3.4)
+
+## [4.3.0] - 2026-03-15
+
+### Added
+- `glossaryVersion` field in contract schema v3.4 (optional string, set from `project.glossary.json`)
+- `project.glossary.json` integration: contractor reads `canonicalTerms` and `aliases` from project root; omits `glossaryVersion` when file is absent
+- `glossary_check`: deterministic lexical scan of goal, inScope, and AC descriptions for forbidden synonyms; WARN-only, non-blocking, results in `spec_quality.json` `glossary_warnings`
+- `terminology_consistency_check`: cross-contract synonym proliferation detection across active contracts in `.signum/contracts/index.json`; WARN-only, non-blocking, skips gracefully when index absent or no active contracts
+- Step 1.4 displays `Glossary: loaded (version X, N terms)` or `Glossary: not found`
+- `lib/prose-check.sh` extended with `run_glossary_scan` function (accepts contract.json + project.glossary.json paths, exits 0 always)
+
+### Changed
+- Contract schema bumped to v3.4 (backward compatible with v3.0–v3.3)
+
+## [4.2.0] - 2026-03-15
+
+### Added
+- Project intent layer: contractor reads `project.intent.md` from target project root
+- `contextInheritance` block in contract schema v3.3 (projectRef, projectIntentSha256)
+- Intent alignment check (LLM-based, medium/high risk, informational)
+- Missing project intent blocks medium/high risk tasks with escapable question
 
 ## v4.1.0 (2026-03-09)
 

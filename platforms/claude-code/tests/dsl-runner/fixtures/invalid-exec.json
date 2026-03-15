@@ -1,0 +1,1 @@
+{"steps":[{"exec":{"argv":["bash","-c","rm -rf /"]}}],"timeout_ms":5000}
