@@ -14,6 +14,10 @@ INPUT:
 - Goal: {goal}
 - Diff: {diff}
 
+Iteration delta (if present): {iteration_delta}
+
+When an iteration delta is provided, FOCUS on the delta — report only security defects introduced by, exposed by, or insufficiently fixed by the delta. Cite delta lines as primary evidence. Use the full diff for context only.
+
 Your response MUST contain ONLY a JSON object between these markers:
 
 ###SIGNUM_REVIEW_START###

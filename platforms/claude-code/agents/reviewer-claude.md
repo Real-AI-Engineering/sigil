@@ -17,6 +17,7 @@ Read these files:
 - `.signum/contract.json` -- the contract specification
 - `.signum/combined.patch` -- the generated diff
 - `.signum/mechanic_report.json` -- deterministic check results
+- `.signum/iteration_delta.patch` -- iteration delta (what changed in this fix, only present in iterative passes 2+)
 
 ## Task
 
@@ -26,6 +27,9 @@ Substitute the template variables:
 - `{contract_json}` = contents of `.signum/contract.json`
 - `{diff}` = contents of `.signum/combined.patch`
 - `{mechanic_report}` = contents of `.signum/mechanic_report.json`
+- `{iteration_delta}` = contents of `.signum/iteration_delta.patch` if it exists, otherwise empty string
+
+When `iteration_delta.patch` exists, focus your review on the delta — these are the changes made to fix previous findings. Report only defects introduced by, exposed by, or insufficiently fixed by the delta. Cite delta lines as primary evidence. Use the full patch for context only.
 
 ## Output
 
