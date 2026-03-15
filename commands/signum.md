@@ -2497,14 +2497,18 @@ if [ ! -f .signum/combined.patch ]; then
 fi
 echo "Repair engineer succeeded for iteration $ITER_NUM — proceeding to audit"
 
-# Capture iteration delta and regenerate combined.patch from same snapshot
-BASE=$(jq -r '.base_commit' .signum/execution_context.json)
-# Stage temporarily to capture new/untracked files in diffs
-git add -A
-git diff --cached > .signum/iteration_delta.patch 2>/dev/null || true
-git diff --cached "$BASE" > .signum/combined.patch 2>/dev/null || true
-# Unstage immediately so scope gate (git diff --name-only) works correctly in audit rerun
-git reset HEAD -- . > /dev/null 2>&1 || true
+# Compute iteration delta by diffing the two stored patches (best candidate vs current)
+# The engineer already wrote combined.patch; we diff it against the best iteration's patch
+BEST_PATCH=".signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch"
+if [ -f "$BEST_PATCH" ]; then
+  # Delta = lines in current patch that differ from best candidate's patch
+  # Use diff on the applied file states, not on patch text
+  # Simpler: extract file lists from both patches and diff only changed files
+  diff -u "$BEST_PATCH" .signum/combined.patch > .signum/iteration_delta.patch 2>/dev/null || true
+else
+  # No best patch to compare against (shouldn't happen after pass 1)
+  cp .signum/combined.patch .signum/iteration_delta.patch 2>/dev/null || true
+fi
 DELTA_SIZE=$(wc -c < .signum/iteration_delta.patch 2>/dev/null || echo 0)
 FULL_SIZE=$(wc -c < .signum/combined.patch 2>/dev/null || echo 0)
 echo "Delta: $DELTA_SIZE bytes, Full: $FULL_SIZE bytes"
