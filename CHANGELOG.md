@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.6.1] - 2026-03-15
+
+### Changed
+- Extracted 6 inline quality checks from `commands/signum.md` into standalone testable scripts:
+  - `lib/glossary-check.sh` — forbidden synonym scan from glossary aliases
+  - `lib/terminology-check.sh` — cross-contract synonym proliferation detection
+  - `lib/overlap-check.sh` — inScope overlap between active contracts
+  - `lib/assumption-check.sh` — assumption contradiction detection
+  - `lib/adr-check.sh` — ADR relevance check for inScope paths
+  - `lib/staleness-check.sh` — upstream artifact staleness detection (pure, no mutation)
+- All scripts: JSON stdout, stderr diagnostics, exit 0 for check results, non-zero for infra errors
+- Orchestrator (`commands/signum.md`) now calls scripts and owns mutation/blocking decisions
+- Removed glossary scan from `lib/prose-check.sh` (ownership moved to `lib/glossary-check.sh`)
+
+### Added
+- `lib/sync-cache.sh` — sync plugin to emporium cache for subagent freshness
+- `project.intent.md` and `project.glossary.json` for Signum's own project context
+
+### Fixed
+- Spec quality gate now recognizes DSL `{steps}` verify format (was only counting `{type, value}`)
+
 ## [4.6.0] - 2026-03-15
 
 ### Added

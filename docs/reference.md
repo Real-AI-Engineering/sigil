@@ -162,6 +162,29 @@ Optional file at `PROJECT_ROOT/project.glossary.json`. When present, contractor 
 | `canonicalTerms` | string[] | Approved terminology for this project |
 | `aliases` | object | Map of forbidden synonyms to their canonical replacements |
 
+### Quality check scripts (lib/)
+
+All Phase 1 quality checks are standalone shell scripts in `lib/`. Each follows the same interface:
+
+```
+lib/<check>.sh <contract.json> [--flag value ...]
+  stdout: {"check":"<name>","status":"ok|warn|block|skip|error","summary":"...","findings":[...]}
+  exit 0: check completed (any status)
+  exit 1+: infra error (bad args, missing jq, corrupt input)
+```
+
+| Script | Purpose | Extra args |
+|--------|---------|-----------|
+| `lib/glossary-check.sh` | Forbidden synonym scan | `--glossary <path>` |
+| `lib/terminology-check.sh` | Cross-contract synonym proliferation | `--index <path>` `--glossary <path>` |
+| `lib/overlap-check.sh` | inScope overlap between active contracts | `--index <path>` |
+| `lib/assumption-check.sh` | Assumption contradiction detection | `--index <path>` |
+| `lib/adr-check.sh` | ADR relevance for inScope paths | `--project-root <dir>` |
+| `lib/staleness-check.sh` | Upstream artifact staleness (pure, no mutation) | `--project-root <dir>` |
+| `lib/prose-check.sh` | Prose quality gate (banned phrases, quantifiers, passive voice) | — |
+
+The orchestrator (`commands/signum.md`) calls each script, reads JSON output, merges findings into `spec_quality.json`, and applies mutations/blocking decisions. Scripts never modify `contract.json` or `spec_quality.json` directly.
+
 #### upstream_staleness_check
 
 Runs during Phase 1 spec quality gate (after the `adr_relevance_check`). Skipped when `contextInheritance.staleIfChanged` is absent or empty.
