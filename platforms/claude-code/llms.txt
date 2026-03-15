@@ -19,7 +19,7 @@ PACK: Bundles contract, diff, baseline, reviews, mechanic report, holdout report
 ## Key Concepts
 
 - Contract: JSON spec with goal, inScope files, acceptanceCriteria (with verify commands), holdoutScenarios (hidden tests), riskLevel, and invariants
-- Proofpack: Self-contained evidence bundle (schema v4.6) with embedded artifacts, audit chain, and decision enum
+- Proofpack: Self-contained evidence bundle (schema v4.1) with embedded artifacts, audit chain, and decision enum
 - Risk-proportional ceremony: Low risk uses Claude-only review; medium adds holdouts + 2-model; high uses full 3-model panel
 - Holdout scenarios: Blind acceptance criteria not shown to the Engineer, validated after implementation
 - Baseline comparison: All checks run before and after changes to detect regressions vs pre-existing failures

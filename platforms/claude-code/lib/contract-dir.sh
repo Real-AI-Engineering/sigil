@@ -64,20 +64,32 @@ register_contract() {
   local created_at
   created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+  # Extract goal, inScope, assumptions from contract.json if available
+  local contract_file="${dir}contract.json"
+  local goal_arg="" inscope_arg="" assumptions_arg=""
+  if [[ -f "$contract_file" ]]; then
+    goal_arg=$(jq -r '.goal // empty' "$contract_file" 2>/dev/null || true)
+    inscope_arg=$(jq -c '.inScope // []' "$contract_file" 2>/dev/null || echo '[]')
+    assumptions_arg=$(jq -c '[(.assumptions // [])[] | .text // .]' "$contract_file" 2>/dev/null || echo '[]')
+  fi
+
   # Add or update entry; also set activeContractId
   jq --arg id "$contract_id" \
      --arg st "$contract_status" \
      --arg dir "$dir" \
      --arg ts "$created_at" \
+     --arg goal "$goal_arg" \
+     --argjson inscope "${inscope_arg:-[]}" \
+     --argjson assumptions "${assumptions_arg:-[]}" \
      '
      .activeContractId = $id |
      if any(.contracts[]; .contractId == $id) then
        .contracts = [.contracts[] |
          if .contractId == $id then
-           . + {status: $st, directory: $dir}
+           . + {status: $st, directory: $dir, goal: $goal, inScope: $inscope, assumptions: $assumptions}
          else . end]
      else
-       .contracts += [{contractId: $id, status: $st, createdAt: $ts, directory: $dir}]
+       .contracts += [{contractId: $id, status: $st, createdAt: $ts, directory: $dir, goal: $goal, inScope: $inscope, assumptions: $assumptions}]
      end
      ' "$index" > "${index}.tmp" && mv "${index}.tmp" "$index"
 
