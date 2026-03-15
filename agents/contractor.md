@@ -60,11 +60,46 @@ You receive:
      3. If negative ("no", "do not proceed", "don't" — case-insensitive):
         - Keep the question, keep `requiredInputsProvided` = false
      4. The `[INTENT_WAIVER]` marker ensures matching only this specific question, not other open questions
+3.6. **4-pass self-critique loop** (medium/high risk only — skip entirely for low risk):
+
+   If `riskLevel` is `"low"`, skip this step. Do NOT set `readinessForPlanning` for low-risk contracts.
+
+   For medium and high risk, run all 4 passes inline (no subagents):
+
+   **Pass 1 — ambiguity review**: Re-read the goal, inScope, acceptanceCriteria, and outOfScope. Flag any phrase or requirement that is ambiguous, underspecified, or could be interpreted in multiple ways. For each finding, record:
+   - `text`: the ambiguous phrase
+   - `location`: where it appears (e.g. `"goal"`, `"AC03.description"`)
+   - `severity`: `"high"` | `"medium"` | `"low"`
+   Write findings to `ambiguityCandidates` array. If none, write empty array.
+
+   **Pass 2 — missing-input review**: Check whether all inputs required by the acceptanceCriteria can actually be provided. Flag any input, dependency, or precondition that is mentioned but not listed in assumptions or inScope. Write resolved decisions (how you handled each gap) to `clarificationDecisions` array. If none, write empty array.
+
+   **Pass 3 — contradiction review**: Check for contradictions between: goal vs outOfScope, acceptanceCriteria vs outOfScope, assumptions vs inScope, riskLevel vs number of affected files. For each contradiction, record:
+   - `claim_a`: first conflicting statement
+   - `claim_b`: second conflicting statement
+   - `type`: `"scope"` | `"risk"` | `"assumption"` | `"criteria"`
+   Write findings to `contradictionsFound` array. If none, write empty array.
+
+   **Pass 4 — goal reconstruction / coverage review**: From the acceptance criteria alone, reconstruct what goal they collectively verify. Compare to the stated goal. If the ACs do not fully cover the goal, add missing ACs. Record typed provenance for each assumption:
+   - `id`: matches an entry in the `assumptions` array
+   - `text`: the assumption text
+   - `source`: `"codebase_scan"` | `"user_request"` | `"inferred"` | `"project_intent"`
+   - `confidence`: `"high"` | `"medium"` | `"low"`
+   Write to `assumptionProvenance` array.
+
+   **Auto-revision**: After all 4 passes, if any `ambiguityCandidates` have severity `"high"` or any `contradictionsFound` exist, revise the contract to resolve them and re-run the 4 passes. Cap auto-revision at a maximum of 2 rounds. If the readinessForPlanning verdict is still `"no-go"` after 2 rounds, escalate to the user by setting `openQuestions` with details and `requiredInputsProvided = false`.
+
+   **Compute readinessForPlanning**: After critique passes (and any auto-revisions):
+   - Set `readinessForPlanning.verdict` = `"go"` if no unresolved high-severity ambiguities and no contradictions remain.
+   - Set `readinessForPlanning.verdict` = `"no-go"` otherwise.
+   - Set `readinessForPlanning.summary` to a one-sentence explanation of the verdict.
+   Write both fields to the contract output.
+
 4. **Generate contract.json** with:
    - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
    - `status`: always set to `"draft"` when generating a new contract
    - `timestamps`: object with `createdAt` set to the current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), e.g. `"2026-03-13T10:00:00Z"`
-   - `schemaVersion`: always `"3.4"` for new contracts
+   - `schemaVersion`: always `"3.7"` for new contracts
    - `glossaryVersion`: set to the `version` from `project.glossary.json` if found; omit entirely when the file is absent
    - goal, inScope, outOfScope, allowNewFilesUnder (if new files needed)
    - acceptanceCriteria with typed verify blocks (DSL format), each with `visibility: "visible"`
@@ -91,6 +126,8 @@ You receive:
      GOOD: `{"exec": {"argv": ["test", "-f", "src/module.py"]}}`
    - riskLevel, riskSignals
    - contextInheritance (projectRef, projectIntentSha256, contextSnapshotHash, staleIfChanged, stalenessStatus, stalenessPolicy — set in step 3.5)
+   - `ambiguityCandidates`, `contradictionsFound`, `clarificationDecisions`, `assumptionProvenance` — typed structured arrays from critique passes (step 3.6); omit for low-risk contracts
+   - `readinessForPlanning` — object with `verdict` (`"go"` or `"no-go"`) and `summary`; omit for low-risk contracts
 5. **Detect lineage** (if `.signum/contracts/index.json` exists):
    - Read completed/archived contracts from index.json
    - For each, check if their inScope files overlap with the new contract's inScope

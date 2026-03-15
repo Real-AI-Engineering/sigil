@@ -1343,6 +1343,21 @@ if [ -f "$INTENT_CHECK" ]; then
 fi
 ```
 
+```bash
+# Show readinessForPlanning verdict (v3.7 self-critique gate)
+RISK_FOR_GATE=$(jq -r '.riskLevel // "low"' .signum/contract.json)
+if jq -e '.readinessForPlanning' .signum/contract.json >/dev/null 2>&1; then
+  VERDICT=$(jq -r '.readinessForPlanning.verdict' .signum/contract.json)
+  SUMMARY=$(jq -r '.readinessForPlanning.summary // "no summary"' .signum/contract.json)
+  echo "Readiness: $VERDICT — $SUMMARY"
+  if [ "$VERDICT" = "no-go" ]; then
+    echo "WARNING: Contractor self-critique returned no-go. Review the contract before approving."
+  fi
+elif [ "$RISK_FOR_GATE" != "low" ]; then
+  echo "WARNING: readinessForPlanning absent on $RISK_FOR_GATE-risk contract. Contractor may not have run self-critique."
+fi
+```
+
 **Present the following 5-item approval checklist to the user.** Display it as a numbered list and ask for a yes/no answer for each item:
 
 ```

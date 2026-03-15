@@ -113,7 +113,7 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"3.0"`–`"3.6"` | Schema version |
+| `schemaVersion` | `"3.0"`–`"3.7"` | Schema version |
 | `glossaryVersion` | string | Version from `project.glossary.json` at contract creation time (optional, omitted when file absent) |
 | `goal` | string | What to build (min 10 chars) |
 | `inScope` | string[] | Items in scope (min 1) |
@@ -135,6 +135,11 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `supersedesContractIds` | string[] | ContractIds this contract replaces (user-declared, optional) |
 | `supersededByContractId` | string | ContractId of the contract that replaces this one (optional) |
 | `interfacesTouched` | string[] | Named interfaces, APIs, or module boundaries this contract modifies (optional) |
+| `ambiguityCandidates` | object[] | Typed findings from ambiguity review pass: `{text, location, severity}` (optional, v3.7+) |
+| `contradictionsFound` | object[] | Typed findings from contradiction review: `{claim_a, claim_b, type}` (optional, v3.7+) |
+| `clarificationDecisions` | object[] | Decisions made during critique: `{question, decision, rationale}` (optional, v3.7+) |
+| `assumptionProvenance` | object[] | Source tracking for assumptions: `{id, text, source, confidence}` (optional, v3.7+) |
+| `readinessForPlanning` | object | Go/no-go gate: `{verdict: "go"\|"no-go", summary: string}` (optional, v3.7+) |
 
 ### project.glossary.json schema
 
