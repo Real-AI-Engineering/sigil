@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.3.0] - 2026-03-15
+
+### Added
+- `glossaryVersion` field in contract schema v3.4 (optional string, set from `project.glossary.json`)
+- `project.glossary.json` integration: contractor reads `canonicalTerms` and `aliases` from project root; omits `glossaryVersion` when file is absent
+- `glossary_check`: deterministic lexical scan of goal, inScope, and AC descriptions for forbidden synonyms; WARN-only, non-blocking, results in `spec_quality.json` `glossary_warnings`
+- `terminology_consistency_check`: cross-contract synonym proliferation detection across active contracts in `.signum/contracts/index.json`; WARN-only, non-blocking, skips gracefully when index absent or no active contracts
+- Step 1.4 displays `Glossary: loaded (version X, N terms)` or `Glossary: not found`
+- `lib/prose-check.sh` extended with `run_glossary_scan` function (accepts contract.json + project.glossary.json paths, exits 0 always)
+
+### Changed
+- Contract schema bumped to v3.4 (backward compatible with v3.0–v3.3)
+
 ## [4.2.0] - 2026-03-15
 
 ### Added

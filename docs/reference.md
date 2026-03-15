@@ -113,7 +113,8 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"3.0"`–`"3.3"` | Schema version |
+| `schemaVersion` | `"3.0"`–`"3.4"` | Schema version |
+| `glossaryVersion` | string | Version from `project.glossary.json` at contract creation time (optional, omitted when file absent) |
 | `goal` | string | What to build (min 10 chars) |
 | `inScope` | string[] | Items in scope (min 1) |
 | `allowNewFilesUnder` | string[] | Directories where new files may be created (optional) |
@@ -126,6 +127,35 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `contextInheritance` | object | Project context references (optional) |
 | `contextInheritance.projectRef` | string\|null | Path to project.intent.md, "not_found", null (waiver), or absent (legacy) |
 | `contextInheritance.projectIntentSha256` | string | SHA-256 of project.intent.md at contract creation |
+
+### project.glossary.json schema
+
+Optional file at `PROJECT_ROOT/project.glossary.json`. When present, contractor reads it and sets `glossaryVersion` in the contract.
+
+```json
+{
+  "version": "1.0.0",
+  "canonicalTerms": ["term1", "term2", "..."],
+  "aliases": {
+    "forbidden-synonym": "canonical-term",
+    "another-synonym": "another-canonical"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Glossary version string (mirrors `glossaryVersion` in contract) |
+| `canonicalTerms` | string[] | Approved terminology for this project |
+| `aliases` | object | Map of forbidden synonyms to their canonical replacements |
+
+#### glossary_check
+
+Runs during Phase 1 spec quality gate (Step 1.3.5). Scans the contract's `goal`, `inScope` items, and AC `description` fields for any term appearing in the `aliases` map (case-insensitive whole-word match). Emits a `WARN` line for each match with the forbidden term and its canonical replacement. Results are written to `glossary_warnings` in `spec_quality.json`. This check is **non-blocking** — it never fails the pipeline or reduces the numeric spec quality score.
+
+#### terminology_consistency_check
+
+Runs during Phase 1 spec quality gate (Step 1.3.5) after `glossary_check`. Reads `.signum/contracts/index.json`, extracts goal text from active contracts, and scans for synonym proliferation (same concept appearing under two different terms across contracts). Emits `WARN` lines on synonym proliferation. When `.signum/contracts/index.json` is absent or contains no contracts with active status, the check outputs a skip message and does not block or fail. This check is **non-blocking**.
 
 ### proofpack.json fields (v4.1)
 

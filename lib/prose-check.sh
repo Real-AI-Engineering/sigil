@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # prose-check.sh -- deterministic prose quality gate for contract.json
-# Usage: prose-check.sh <path/to/contract.json>
+# Usage: prose-check.sh <path/to/contract.json> [path/to/project.glossary.json]
 # Outputs: JSON report to stdout
 # Exit: 0 always (non-blocking informational check)
 
 set -euo pipefail
 
 CONTRACT="${1:-}"
+GLOSSARY="${2:-}"
 if [ -z "$CONTRACT" ]; then
-  echo '{"error":"Usage: prose-check.sh <contract.json>"}' >&2
+  echo '{"error":"Usage: prose-check.sh <contract.json> [project.glossary.json]"}' >&2
   exit 1
 fi
 if [ ! -f "$CONTRACT" ]; then
@@ -123,6 +124,44 @@ QUANTIFIER_ARR=$(jsonl_to_array "$QUANTIFIER_FILE")
 PASSIVE_ARR=$(jsonl_to_array "$PASSIVE_FILE")
 IMPL_ARR=$(jsonl_to_array "$IMPL_FILE")
 
+# -----------------------------------------------------------------------
+# Glossary scan function: accepts contract.json and project.glossary.json
+# Scans goal, inScope, and AC descriptions for forbidden synonyms (aliases)
+# Always exits 0 (non-blocking)
+# -----------------------------------------------------------------------
+GLOSSARY_FILE="$TMPDIR_LOCAL/glossary_warns.jsonl"
+touch "$GLOSSARY_FILE"
+
+run_glossary_scan() {
+  local contract="$1" glossary="$2"
+  [ -z "$glossary" ] && return 0
+  [ ! -f "$glossary" ] && return 0
+
+  local scan_text
+  scan_text=$(jq -r '
+    .goal,
+    (.inScope // [] | .[]),
+    (.acceptanceCriteria // [] | .[].description)
+  ' "$contract" | tr '\n' ' ')
+
+  jq -r '.aliases | to_entries[] | .key + "|" + .value' "$glossary" | \
+  while IFS='|' read -r synonym canonical; do
+    [ -z "$synonym" ] && continue
+    local matched
+    matched=$(echo "$scan_text" | grep -Foiw -- "$synonym" 2>/dev/null | head -1 || true)
+    if [ -n "$matched" ]; then
+      jq -n --arg term "$matched" --arg canonical "$canonical" \
+        '{"term":$term,"canonical":$canonical,"message":("use canonical term \"" + $canonical + "\" instead of synonym \"" + $term + "\"")}' \
+        >> "$GLOSSARY_FILE"
+    fi
+  done
+  return 0
+}
+
+run_glossary_scan "$CONTRACT" "$GLOSSARY"
+
+GLOSSARY_ARR=$(jsonl_to_array "$GLOSSARY_FILE")
+
 BANNED_COUNT=$(echo "$BANNED_ARR" | jq 'length')
 QUANTIFIER_COUNT=$(echo "$QUANTIFIER_ARR" | jq 'length')
 PASSIVE_COUNT=$(echo "$PASSIVE_ARR" | jq 'length')
@@ -149,6 +188,7 @@ jq -n \
   --argjson passive "$PASSIVE_ARR" \
   --argjson impl_count "$IMPL_COUNT" \
   --argjson impl "$IMPL_ARR" \
+  --argjson glossary_warns "$GLOSSARY_ARR" \
   '{
     total_findings: $total,
     pass: $pass,
@@ -157,5 +197,6 @@ jq -n \
       imprecise_quantifiers: { count: $quantifier_count, findings: $quantifier },
       passive_voice: { count: $passive_count, findings: $passive },
       implementation_leakage: { count: $impl_count, findings: $impl }
-    }
+    },
+    glossary_warnings: $glossary_warns
   }'

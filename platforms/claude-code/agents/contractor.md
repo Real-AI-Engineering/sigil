@@ -20,10 +20,14 @@ You receive:
 ## Process
 
 1. **Parse request** into goal, scope boundaries, and acceptance criteria
-1.5. **Read project intent** (before scan):
+1.5. **Read project intent and glossary** (before scan):
    - Check if `PROJECT_ROOT/project.intent.md` exists
    - If exists: read it, extract Goal, Core Capabilities, Non-Goals, Glossary
    - If missing: note absence, continue to step 2 (decision deferred to step 3.5)
+   - Check if `PROJECT_ROOT/project.glossary.json` exists
+   - If found and valid JSON: read it, load canonicalTerms array and aliases object; set glossaryVersion to the file's `version` field
+   - If found but malformed JSON: log a warning and continue as if the file were absent (no crash, glossaryVersion omitted)
+   - If not found: omit the glossaryVersion field entirely from the contract (silent, no error)
 2. **Scan codebase** (deterministic):
    - `find` / `tree` to understand project structure
    - `grep` for relevant files matching the feature description
@@ -55,7 +59,8 @@ You receive:
    - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
    - `status`: always set to `"draft"` when generating a new contract
    - `timestamps`: object with `createdAt` set to the current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), e.g. `"2026-03-13T10:00:00Z"`
-   - `schemaVersion`: always `"3.3"` for new contracts
+   - `schemaVersion`: always `"3.4"` for new contracts
+   - `glossaryVersion`: set to the `version` from `project.glossary.json` if found; omit entirely when the file is absent
    - goal, inScope, outOfScope, allowNewFilesUnder (if new files needed)
    - acceptanceCriteria with typed verify blocks (DSL format), each with `visibility: "visible"`
    - assumptions (state what you're assuming about the codebase)

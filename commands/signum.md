@@ -607,7 +607,8 @@ Use the Bash tool to run the prose quality gate on the contract. This check is *
 ```bash
 PROSE_REPORT=""
 if [ -f lib/prose-check.sh ]; then
-  PROSE_REPORT=$(lib/prose-check.sh .signum/contract.json 2>/dev/null || echo '{}')
+  GLOSSARY_PATH="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+  PROSE_REPORT=$(lib/prose-check.sh .signum/contract.json "$GLOSSARY_PATH" 2>/dev/null || echo '{}')
   PROSE_TOTAL=$(echo "$PROSE_REPORT" | jq '.total_findings // 0')
   PROSE_PASS=$(echo "$PROSE_REPORT" | jq -r '.pass // "true"')
   echo "Prose quality: $PROSE_TOTAL finding(s), pass=$PROSE_PASS"
@@ -617,6 +618,115 @@ if [ -f lib/prose-check.sh ]; then
     jq --argjson prose "$PROSE_REPORT" '. + {prose_warnings: $prose}' \
       .signum/spec_quality.json > .signum/spec_quality_tmp.json \
       && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+fi
+```
+
+#### Glossary check (glossary_check — informational, non-blocking)
+
+Run the glossary_check: scan goal, inScope items, and AC descriptions for forbidden synonyms from `project.glossary.json` aliases. This check is **non-blocking** — it never fails the pipeline or reduces the numeric spec quality score. Warnings are written only to `glossary_warnings` in `spec_quality.json`.
+
+```bash
+GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+if [ -f "$GLOSSARY_FILE" ]; then
+  GLOSSARY_VERSION=$(jq -r '.version // ""' "$GLOSSARY_FILE")
+  GLOSSARY_TERMS=$(jq -r '.canonicalTerms | length' "$GLOSSARY_FILE")
+  echo "Glossary: loaded (version $GLOSSARY_VERSION, $GLOSSARY_TERMS terms)"
+
+  # Build text to scan: goal + inScope items + AC descriptions
+  SCAN_TEXT=$(jq -r '
+    .goal,
+    (.inScope // [] | .[]),
+    (.acceptanceCriteria // [] | .[].description)
+  ' .signum/contract.json | tr '\n' ' ')
+
+  # Read aliases map and scan for forbidden synonyms
+  GLOSSARY_WARNS=$(jq -r '.aliases | to_entries[] | .key + "|" + .value' "$GLOSSARY_FILE" | \
+  while IFS='|' read -r synonym canonical; do
+    [ -z "$synonym" ] && continue
+    matched=$(echo "$SCAN_TEXT" | grep -Foiw -- "$synonym" 2>/dev/null | head -1 || true)
+    if [ -n "$matched" ]; then
+      jq -n --arg term "$matched" --arg canonical "$canonical" \
+        '{"term": $term, "canonical": $canonical, "message": ("WARN: use canonical term \"" + $canonical + "\" instead of synonym \"" + $term + "\"")}'
+    fi
+  done | jq -s '.')
+
+  WARN_COUNT=$(echo "$GLOSSARY_WARNS" | jq 'length')
+  if [ "$WARN_COUNT" -gt 0 ]; then
+    echo "Glossary check: $WARN_COUNT forbidden synonym(s) found (WARN only)"
+    echo "$GLOSSARY_WARNS" | jq -r '.[] | "  WARN: use canonical term \"" + .canonical + "\" instead of synonym \"" + .term + "\""'
+  else
+    echo "Glossary check: no forbidden synonyms found"
+  fi
+
+  # Write glossary_warnings into spec_quality.json (non-blocking, does not affect score)
+  if [ -f .signum/spec_quality.json ]; then
+    jq --argjson warns "$GLOSSARY_WARNS" \
+       --arg gver "$GLOSSARY_VERSION" \
+       --argjson gterms "$GLOSSARY_TERMS" \
+      '. + {glossary_warnings: $warns, glossary_version: $gver, glossary_terms: $gterms}' \
+      .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+      && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+else
+  echo "Glossary: not found (skipping glossary_check)"
+fi
+```
+
+#### Terminology consistency check (terminology_consistency_check — informational, non-blocking)
+
+Run the terminology_consistency_check: read `.signum/contracts/index.json`, extract goal text from active contracts, and emit WARN on synonym proliferation (same concept appearing under two different terms across contracts). This check is **non-blocking**.
+
+```bash
+INDEX_FILE=".signum/contracts/index.json"
+if [ ! -f "$INDEX_FILE" ]; then
+  echo "terminology_consistency_check: skipped (no contracts index found)"
+else
+  ACTIVE_GOALS=$(jq -r '
+    (.contracts // []) |
+    map(select(.status == "active")) |
+    if length == 0 then empty
+    else .[].goal // empty
+    end
+  ' "$INDEX_FILE" 2>/dev/null || true)
+
+  if [ -z "$ACTIVE_GOALS" ]; then
+    echo "terminology_consistency_check: no contracts with active status — skipped"
+  else
+    ALL_GOALS=$(echo "$ACTIVE_GOALS" | tr '\n' ' ')
+    GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+    # Check for synonym proliferation using the built-in synonym pairs
+    _tc_check() {
+      local a="$1" b="$2"
+      local has_a has_b
+      has_a=$(echo "$ALL_GOALS" | grep -ciw "$a" 2>/dev/null || echo 0)
+      has_b=$(echo "$ALL_GOALS" | grep -ciw "$b" 2>/dev/null || echo 0)
+      if [ "$has_a" -gt 0 ] && [ "$has_b" -gt 0 ]; then
+        echo "WARN: synonym proliferation detected — '$a' and '$b' used for the same concept across active contracts"
+      fi
+    }
+    _tc_check "endpoint" "route"
+    _tc_check "function" "method"
+    _tc_check "test" "spec"
+    _tc_check "error" "exception"
+    _tc_check "config" "configuration"
+    _tc_check "config" "settings"
+    _tc_check "user" "client"
+    _tc_check "file" "document"
+
+    # If project.glossary.json is present, also check glossary aliases across active contracts
+    if [ -f "$GLOSSARY_FILE" ]; then
+      jq -r '.aliases | to_entries[] | .key + "|" + .value' "$GLOSSARY_FILE" | \
+      while IFS='|' read -r synonym canonical; do
+        [ -z "$synonym" ] && continue
+        has_syn=$(echo "$ALL_GOALS" | grep -Fciw -- "$synonym" 2>/dev/null || echo 0)
+        has_can=$(echo "$ALL_GOALS" | grep -Fciw -- "$canonical" 2>/dev/null || echo 0)
+        if [ "$has_syn" -gt 0 ] && [ "$has_can" -gt 0 ]; then
+          echo "WARN: synonym proliferation detected — glossary synonym '$synonym' and canonical '$canonical' both appear in active contract goals"
+        fi
+      done
+    fi
+    echo "terminology_consistency_check: complete"
   fi
 fi
 ```
@@ -887,6 +997,18 @@ Also display any riskSignals if riskLevel is "high":
 ```bash
 jq -r 'if .riskLevel == "high" then "Risk signals: " + (.riskSignals // [] | join(", ")) else empty end' \
   .signum/contract.json
+```
+
+```bash
+# Show glossary status
+GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
+if [ -f "$GLOSSARY_FILE" ]; then
+  GVER=$(jq -r '.version // "unknown"' "$GLOSSARY_FILE")
+  GTERMS=$(jq -r '.canonicalTerms | length' "$GLOSSARY_FILE")
+  echo "Glossary: loaded (version $GVER, $GTERMS terms)"
+else
+  echo "Glossary: not found"
+fi
 ```
 
 ```bash
