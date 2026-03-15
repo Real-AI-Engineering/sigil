@@ -1803,8 +1803,13 @@ cp .signum/audit_summary.json .signum/iterations/01/
 BEST_SCORE=$ITERATION_SCORE
 BEST_ITERATION=1
 PASS1_FINDINGS=$(jq '[.reviews[].findings[]? | {fingerprint: .fingerprint, severity: .severity, category: .category, file: .file, line: .line}] | unique_by(.fingerprint // (.file + ":" + (.line | tostring) + ":" + .category))' .signum/audit_summary.json)
-jq -n --argjson score "$ITERATION_SCORE" --argjson findings "$PASS1_FINDINGS" \
-  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'", "canonicalFindings": $findings}]' \
+PASS1_FINDINGS_COUNT=$(jq '{
+  critical: [.reviews[].findings[]? | select(.severity == "CRITICAL")] | length,
+  major: [.reviews[].findings[]? | select(.severity == "MAJOR")] | length,
+  minor: [.reviews[].findings[]? | select(.severity == "MINOR")] | length
+}' .signum/audit_summary.json)
+jq -n --argjson score "$ITERATION_SCORE" --argjson findings "$PASS1_FINDINGS" --argjson findingsCount "$PASS1_FINDINGS_COUNT" \
+  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'", "findingsCount": $findingsCount, "canonicalFindings": $findings}]' \
   > .signum/audit_iteration_log.json
 
 echo "Iteration 1 stored. Best score: $BEST_SCORE"
@@ -1897,14 +1902,18 @@ if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; t
   echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
   git clean -fd
   git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
-  git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch || { echo "ROLLBACK_FAILED: git apply failed for iteration $BEST_ITERATION"; }
-  # Sync .signum/ working copies from best iteration
-  BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
-  cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
-  cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
-  cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
-  cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
-  cp "${BEST_DIR}/audit_summary.json" .signum/ 2>/dev/null || true
+  if git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
+    # Sync .signum/ working copies from best iteration
+    BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+    cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+    cp "${BEST_DIR}/audit_summary.json" .signum/ 2>/dev/null || true
+  else
+    echo "ROLLBACK_FAILED: git apply failed for iteration $BEST_ITERATION — forcing early stop"
+    NO_IMPROVE_COUNT=99
+  fi
 fi
 ```
 
@@ -1978,10 +1987,15 @@ NEW_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
 
 # Extract deduplicated findings with fingerprints for cross-iteration comparison
 NEW_FINDINGS=$(jq '[.reviews[].findings[]? | {fingerprint: .fingerprint, severity: .severity, category: .category, file: .file, line: .line}] | unique_by(.fingerprint // (.file + ":" + (.line | tostring) + ":" + .category))' .signum/audit_summary.json)
+NEW_FINDINGS_COUNT=$(jq '{
+  critical: [.reviews[].findings[]? | select(.severity == "CRITICAL")] | length,
+  major: [.reviews[].findings[]? | select(.severity == "MAJOR")] | length,
+  minor: [.reviews[].findings[]? | select(.severity == "MINOR")] | length
+}' .signum/audit_summary.json)
 
 # Update iteration log
-jq --argjson score "$NEW_SCORE" --arg decision "$NEW_DECISION" --argjson pass "$ITER_NUM" --argjson findings "$NEW_FINDINGS" \
-  '. + [{"pass": $pass, "score": $score, "decision": $decision, "canonicalFindings": $findings}]' \
+jq --argjson score "$NEW_SCORE" --arg decision "$NEW_DECISION" --argjson pass "$ITER_NUM" --argjson findings "$NEW_FINDINGS" --argjson findingsCount "$NEW_FINDINGS_COUNT" \
+  '. + [{"pass": $pass, "score": $score, "decision": $decision, "findingsCount": $findingsCount, "canonicalFindings": $findings}]' \
   .signum/audit_iteration_log.json > .signum/audit_iteration_log.json.tmp \
   && mv .signum/audit_iteration_log.json.tmp .signum/audit_iteration_log.json
 
@@ -2022,14 +2036,15 @@ if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
     jq '.decision = "HUMAN_REVIEW" | .terminalReason = "final restore of best candidate patch failed"' \
       .signum/audit_summary.json > .signum/audit_summary.json.tmp \
       && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
+  else
+    # Sync working copies only on successful apply — do NOT overwrite on failure
+    BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+    cp "${BEST_DIR}/combined.patch" .signum/
+    cp "${BEST_DIR}/mechanic_report.json" .signum/
+    cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+    cp "${BEST_DIR}/audit_summary.json" .signum/
   fi
-  # Sync working copies
-  BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
-  cp "${BEST_DIR}/combined.patch" .signum/
-  cp "${BEST_DIR}/mechanic_report.json" .signum/
-  cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
-  cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
-  cp "${BEST_DIR}/audit_summary.json" .signum/
 fi
 
 # Determine terminal decision from best candidate
@@ -2044,8 +2059,8 @@ REMAINING_CRITICAL=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL
 REMAINING_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
 REMAINING_MINOR=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
 
-BEST_MECH_REGRESSIONS=$(jq -r '.hasRegressions' .signum/audit_summary.json 2>/dev/null || echo "false")
-BEST_HOLDOUT_FAILED=$(jq '.holdout.failed // 0' .signum/audit_summary.json 2>/dev/null || echo 0)
+BEST_MECH_REGRESSIONS=$(jq -r '.hasRegressions' .signum/mechanic_report.json 2>/dev/null || echo "false")
+BEST_HOLDOUT_FAILED=$(jq '.failed // 0' .signum/holdout_report.json 2>/dev/null || echo 0)
 
 if [ "$REMAINING_CRITICAL" -gt 0 ]; then
   FINAL_DECISION="AUTO_BLOCK"
@@ -2290,11 +2305,37 @@ ITERATIONS_USED_PACK=$(jq -r '.iterationsUsed // 1' .signum/audit_summary.json 2
 BEST_ITERATION_PACK=$(jq -r '.bestIteration // 1' .signum/audit_summary.json 2>/dev/null || echo 1)
 ITERATIVE_AUDIT_JSON="null"
 if [ "$ITERATIONS_USED_PACK" -gt 1 ] && [ -f .signum/audit_iteration_log.json ]; then
+  # Read audit_summary metadata fields required by iterativeAudit schema
+  PACK_ITERS_MAX=$(jq -r '.iterationsMax // 20' .signum/audit_summary.json 2>/dev/null || echo 20)
+  PACK_EARLY_STOP=$(jq -r '.earlyStop // false' .signum/audit_summary.json 2>/dev/null || echo false)
+  PACK_EARLY_STOP_REASON=$(jq -r '.earlyStopReason // ""' .signum/audit_summary.json 2>/dev/null || echo "")
+  PACK_TERMINAL_REASON=$(jq -r '.terminalReason // ""' .signum/audit_summary.json 2>/dev/null || echo "")
+  PACK_REMAINING_SEV=$(jq -r '.remainingSeverity // "none"' .signum/audit_summary.json 2>/dev/null || echo "none")
+  # Build resolvedFindings: findings present in pass 1 but absent in final pass (by fingerprint)
+  PACK_RESOLVED=$(jq -n \
+    --argjson log "$(cat .signum/audit_iteration_log.json)" \
+    '($log[0].canonicalFindings // []) as $first |
+     ($log[-1].canonicalFindings // []) as $last |
+     ($last | map(.fingerprint // (.file + ":" + (.line|tostring) + ":" + .category))) as $lastFps |
+     [$first[] | select((.fingerprint // (.file + ":" + (.line|tostring) + ":" + .category)) as $fp | $lastFps | index($fp) | not)]')
+  # Build remainingFindings: findings present in the final pass
+  PACK_REMAINING=$(jq '[-1].canonicalFindings // []' .signum/audit_iteration_log.json 2>/dev/null || echo "[]")
   ITERATIVE_AUDIT_JSON=$(jq -n \
     --argjson iters_used "$ITERATIONS_USED_PACK" \
+    --argjson iters_max "$PACK_ITERS_MAX" \
     --argjson best "$BEST_ITERATION_PACK" \
+    --argjson early_stop "$PACK_EARLY_STOP" \
+    --arg early_stop_reason "$PACK_EARLY_STOP_REASON" \
+    --arg terminal_reason "$PACK_TERMINAL_REASON" \
+    --arg remaining_sev "$PACK_REMAINING_SEV" \
+    --argjson resolved "$PACK_RESOLVED" \
+    --argjson remaining "$PACK_REMAINING" \
     --argjson log "$(cat .signum/audit_iteration_log.json)" \
-    '{iterationsUsed: $iters_used, bestIteration: $best, auditIterations: $log}')
+    '{iterationsUsed: $iters_used, iterationsMax: $iters_max, bestIteration: $best,
+      earlyStop: $early_stop, earlyStopReason: $early_stop_reason,
+      terminalReason: $terminal_reason, remainingSeverity: $remaining_sev,
+      resolvedFindings: $resolved, remainingFindings: $remaining,
+      auditIterations: $log}')
 fi
 
 # Final assembly
