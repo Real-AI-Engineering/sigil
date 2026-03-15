@@ -136,6 +136,75 @@ PPEOF
 done
 
 echo ""
+echo "=== SIGNUM_CI_RELAXED mode ==="
+
+# HUMAN_REVIEW in strict mode (default) → exit 78
+set +e
+exit_code=$(SIGNUM_CI_RELAXED=false bash -c '
+  DECISION="HUMAN_REVIEW"
+  case "$DECISION" in
+    AUTO_OK) exit 0 ;;
+    AUTO_BLOCK) exit 1 ;;
+    HUMAN_REVIEW)
+      if [ "${SIGNUM_CI_RELAXED:-false}" = "true" ]; then exit 0; else exit 78; fi ;;
+    *) exit 1 ;;
+  esac
+')
+actual_exit=$?
+set -e
+if [[ "$actual_exit" -eq 78 ]]; then
+  printf '  PASS: HUMAN_REVIEW strict → exit 78\n'
+  passed=$((passed + 1))
+else
+  printf '  FAIL: HUMAN_REVIEW strict — expected 78, got %s\n' "$actual_exit"
+  failed=$((failed + 1))
+fi
+
+# HUMAN_REVIEW in relaxed mode → exit 0
+set +e
+exit_code=$(SIGNUM_CI_RELAXED=true bash -c '
+  DECISION="HUMAN_REVIEW"
+  case "$DECISION" in
+    AUTO_OK) exit 0 ;;
+    AUTO_BLOCK) exit 1 ;;
+    HUMAN_REVIEW)
+      if [ "${SIGNUM_CI_RELAXED:-false}" = "true" ]; then exit 0; else exit 78; fi ;;
+    *) exit 1 ;;
+  esac
+')
+actual_exit=$?
+set -e
+if [[ "$actual_exit" -eq 0 ]]; then
+  printf '  PASS: HUMAN_REVIEW relaxed → exit 0\n'
+  passed=$((passed + 1))
+else
+  printf '  FAIL: HUMAN_REVIEW relaxed — expected 0, got %s\n' "$actual_exit"
+  failed=$((failed + 1))
+fi
+
+# AUTO_BLOCK is unaffected by relaxed mode → still exit 1
+set +e
+exit_code=$(SIGNUM_CI_RELAXED=true bash -c '
+  DECISION="AUTO_BLOCK"
+  case "$DECISION" in
+    AUTO_OK) exit 0 ;;
+    AUTO_BLOCK) exit 1 ;;
+    HUMAN_REVIEW)
+      if [ "${SIGNUM_CI_RELAXED:-false}" = "true" ]; then exit 0; else exit 78; fi ;;
+    *) exit 1 ;;
+  esac
+')
+actual_exit=$?
+set -e
+if [[ "$actual_exit" -eq 1 ]]; then
+  printf '  PASS: AUTO_BLOCK relaxed → still exit 1\n'
+  passed=$((passed + 1))
+else
+  printf '  FAIL: AUTO_BLOCK relaxed — expected 1, got %s\n' "$actual_exit"
+  failed=$((failed + 1))
+fi
+
+echo ""
 echo "=== SHA-256 hash computation ==="
 
 # Verify hash is computed correctly

@@ -202,11 +202,28 @@ Runs during Phase 1 spec quality gate after `cross_contract_overlap_check`. Read
 
 Runs during Phase 1 spec quality gate. Scans for `docs/adr/` or `docs/decisions/` directories. If ADR files exist and the contract's `inScope` touches paths that match ADR file globs, emits `WARN` suggesting the contract reference relevant ADRs. Skips when no ADR directories exist. **Non-blocking.**
 
-### proofpack.json fields (v4.1)
+### Iterative AUDIT (v4.6+)
+
+When AUDIT finds MAJOR or CRITICAL issues, it enters an iterative repair loop:
+
+1. Engineer fixes findings (fresh agent, clean context)
+2. Full review cycle re-runs from scratch
+3. Repeats until convergence or max iterations
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `SIGNUM_AUDIT_MAX_ITERATIONS` | `20` | Maximum audit fix iterations before terminal decision |
+| `SIGNUM_CI_RELAXED` | `false` | If `"true"`, HUMAN_REVIEW maps to exit 0 instead of 78 |
+
+Iteration artifacts are stored in `.signum/iterations/01/`, `.signum/iterations/02/`, etc. Each contains the full set of audit artifacts for that pass.
+
+The proofpack includes an `iterativeAudit` section when >1 iteration was used, with per-iteration summaries, resolved/remaining findings, and the best iteration number.
+
+### proofpack.json fields (v4.6)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"4.0"` or `"4.1"` | Schema version (v4.1 adds ciContext, baselineComparison, contractSource) |
+| `schemaVersion` | `"4.6"` | Schema version (v4.6 adds iterativeAudit, ciContext, baselineComparison, contractSource) |
 | `signumVersion` | string | Signum version that generated this proofpack |
 | `createdAt` | string | ISO 8601 timestamp of proofpack creation |
 | `runId` | string | `signum-YYYY-MM-DD-XXXXXX` |
@@ -222,6 +239,12 @@ Runs during Phase 1 spec quality gate. Scans for `docs/adr/` or `docs/decisions/
 | `checks.holdout` | envelope | Holdout scenario pass/fail (if applicable) |
 | `checks.reviews.*` | envelope | Per-provider review (dynamic keys) |
 | `checks.auditSummary` | envelope | Synthesized decision with confidence |
+| `iterativeAudit` | object | Iteration metadata (v4.6+, present only when >1 iteration) |
+| `iterativeAudit.iterationsUsed` | integer | Total iterations run |
+| `iterativeAudit.bestIteration` | integer | Iteration with best score |
+| `iterativeAudit.auditIterations` | array | Per-iteration summaries (score, findings count, decision) |
+| `iterativeAudit.resolvedFindings` | array | Findings fixed during iterations |
+| `iterativeAudit.remainingFindings` | array | Findings still present after all iterations |
 
 Each artifact uses the **envelope format**: `{ content, sha256, sizeBytes, status, omitReason? }`.
 - `status: present` — content embedded

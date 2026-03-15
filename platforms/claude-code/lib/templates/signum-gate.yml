@@ -41,6 +41,8 @@ jobs:
           SIGNUM_CONTRACT_PATH: ${{ github.workspace }}/contract.json
           SIGNUM_PROJECT_ROOT: ${{ github.workspace }}
           SIGNUM_MAX_TURNS: "30"
+          SIGNUM_AUDIT_MAX_ITERATIONS: "20"
+          # SIGNUM_CI_RELAXED: "true"  # Uncomment to pass HUMAN_REVIEW as success
         run: |
           set +e
           bash lib/signum-ci.sh

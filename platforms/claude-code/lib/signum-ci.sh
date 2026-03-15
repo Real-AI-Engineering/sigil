@@ -12,6 +12,8 @@
 #   SIGNUM_MAX_TURNS     — max agent turns (default: 30)
 #   SIGNUM_ALLOWED_TOOLS — comma-separated tool allowlist (optional)
 #   SIGNUM_PROJECT_ROOT  — project root (default: current directory)
+#   SIGNUM_AUDIT_MAX_ITERATIONS — max audit fix iterations (default: 20, inherited by pipeline)
+#   SIGNUM_CI_RELAXED    — if "true", HUMAN_REVIEW maps to exit 0 (pass with warning)
 
 set -euo pipefail
 
@@ -100,8 +102,13 @@ case "$DECISION" in
     exit 1
     ;;
   HUMAN_REVIEW)
-    echo "Status: NEEDS REVIEW"
-    exit 78
+    if [ "${SIGNUM_CI_RELAXED:-false}" = "true" ]; then
+      echo "Status: NEEDS REVIEW (relaxed mode — passing)"
+      exit 0
+    else
+      echo "Status: NEEDS REVIEW"
+      exit 78
+    fi
     ;;
   *)
     echo "ERROR: Unknown decision: $DECISION" >&2
