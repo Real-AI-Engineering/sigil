@@ -1845,10 +1845,11 @@ fi
 SKIP_ITERATION=false
 if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; then
   echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
-  # Rollback using stored patch: revert only files listed in current iteration's combined.patch
+  # Rollback: revert files from current patch (if exists) or best iteration's stored patch
   BASE=$(jq -r '.base_commit' .signum/execution_context.json)
-  # Extract file list from the STORED patch (not worktree scan — avoids touching unrelated files)
-  PATCH_FILES=$(grep '^diff --git' .signum/combined.patch | sed 's|^diff --git a/||; s| b/.*||' | sort -u)
+  ROLLBACK_PATCH=".signum/combined.patch"
+  [ ! -f "$ROLLBACK_PATCH" ] && ROLLBACK_PATCH=".signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch"
+  PATCH_FILES=$(grep '^diff --git' "$ROLLBACK_PATCH" 2>/dev/null | sed 's|^diff --git a/||; s| b/.*||' | sort -u)
   for f in $PATCH_FILES; do
     git checkout "$BASE" -- "$f" 2>/dev/null || rm -f "$f" 2>/dev/null || true
   done
