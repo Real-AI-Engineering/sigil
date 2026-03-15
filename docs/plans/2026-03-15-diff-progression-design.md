@@ -26,68 +26,51 @@ The reviewer prompt instructs: "Focus your review on the delta. Use the full pat
 
 ### Delta Computation
 
-After engineer produces a fix and before launching reviews:
+#### Ownership
+
+The **orchestrator** owns delta generation — not the engineer. After the repair success gate (Step 3.6.2) passes, the orchestrator runs both capture commands from a single place:
 
 ```bash
-# Compute delta: diff between best candidate and current candidate
-if [ "$CURRENT_ITERATION" -gt 1 ] && [ -f ".signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch" ]; then
-  # Create temp files with applied states
-  BEST_PATCH=".signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch"
-  CURRENT_PATCH=".signum/combined.patch"
-
-  # Diff the two patches to get what changed
-  # Method: apply best patch to base, save state; apply current patch to base, diff the two
-  BASE=$(jq -r '.base_commit' .signum/execution_context.json)
-
-  # Simple approach: diff the patch files themselves (shows what lines were added/removed/changed)
-  diff -u "$BEST_PATCH" "$CURRENT_PATCH" > .signum/iteration_delta.patch 2>/dev/null || true
-
-  DELTA_LINES=$(wc -l < .signum/iteration_delta.patch 2>/dev/null || echo 0)
-  echo "Delta patch: $DELTA_LINES lines (vs $(wc -l < "$CURRENT_PATCH") full patch)"
-else
-  # First iteration or no previous — no delta
-  rm -f .signum/iteration_delta.patch
-fi
-```
-
-**Better approach** — diff the applied states, not the patches:
-
-```bash
-if [ "$CURRENT_ITERATION" -gt 1 ]; then
-  BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
-  if [ -f "$BEST_DIR/combined.patch" ]; then
-    # Generate delta: what changed from best candidate to current candidate
-    # Use git diff between two applied states via temp worktree comparison
-    BASE=$(jq -r '.base_commit' .signum/execution_context.json)
-
-    # Apply best patch to get its file state, then diff against current working tree
-    DELTA_DIR=$(mktemp -d)
-    git archive "$BASE" | tar -x -C "$DELTA_DIR"
-    (cd "$DELTA_DIR" && git apply "$OLDPWD/$BEST_DIR/combined.patch" 2>/dev/null || true)
-
-    # Diff best-applied state vs current working tree (only inScope files)
-    diff -ruN "$DELTA_DIR" . --exclude='.signum' --exclude='.git' > .signum/iteration_delta.patch 2>/dev/null || true
-    rm -rf "$DELTA_DIR"
-
-    DELTA_LINES=$(wc -l < .signum/iteration_delta.patch 2>/dev/null || echo 0)
-    echo "Delta: $DELTA_LINES lines changed from iteration $BEST_ITERATION"
-  fi
-fi
-```
-
-**Simplest practical approach** — engineer generates delta as part of repair:
-
-Since the engineer starts from the best candidate (after rollback), `git diff` at the end of repair IS the delta. We just need to capture it separately:
-
-```bash
-# After engineer completes repair and before generating combined.patch:
-# The working tree diff IS the iteration delta (engineer started from best candidate)
+# After engineer completes repair and repair success gate passes (Step 3.6.2):
+# git diff (unstaged) = iteration delta; engineer started from best candidate state
 git diff > .signum/iteration_delta.patch
-# Then generate full combined.patch from base
+# git diff $BASE = full combined patch from base commit
 git diff $BASE > .signum/combined.patch
 ```
 
-This is the cleanest approach. The engineer always starts from the best candidate state (after rollback), so `git diff` (unstaged changes) = exactly what the fix changed.
+The engineer always starts from the best candidate state (after rollback), so `git diff` (unstaged changes) equals exactly what the fix changed. `git diff $BASE` then gives the full feature diff. Both are computed by the orchestrator immediately after the repair gate, before launching reviews.
+
+#### Artifact Lifecycle
+
+**Before repair** — clear stale artifacts alongside execute_log and combined.patch:
+
+```bash
+rm -f .signum/iteration_delta.patch .signum/execute_log .signum/combined.patch
+```
+
+**Post-repair guard** — if delta is absent or zero-length after repair, mark iteration as non-improving and skip Steps 3.1.5–3.5 (delta-focused review path):
+
+```bash
+DELTA_SIZE=$(wc -c < .signum/iteration_delta.patch 2>/dev/null || echo 0)
+if [ "$DELTA_SIZE" -eq 0 ]; then
+  echo "Delta absent or empty — non-improving iteration, skipping delta review path"
+  # falls through to existing REPAIR_SKIP / no-op handling
+fi
+```
+
+**Store in iteration directory** — copy delta alongside combined.patch:
+
+```bash
+cp .signum/iteration_delta.patch "$ITER_DIR/"
+```
+
+**Rollback sync** — when rolling back to a best iteration, copy its delta:
+
+```bash
+cp ".signum/iterations/$(printf '%02d' $BEST_ITERATION)/iteration_delta.patch" .signum/iteration_delta.patch 2>/dev/null || rm -f .signum/iteration_delta.patch
+```
+
+**Restart/archive cleanup** — add `iteration_delta.patch` to cleanup lists alongside combined.patch and execute_log in both restart and archive routines.
 
 ### Reviewer Prompt Changes
 
@@ -108,9 +91,9 @@ Review this code change. Two diffs are provided:
 {iteration_delta}
 
 FOCUS your review on the DELTA — these are the changes made to fix previous findings.
-Use the full diff only for context (understanding how the delta fits into the larger change).
-Do NOT re-report findings about code in the full diff that was NOT changed in the delta.
-Only report NEW issues introduced by the delta, or issues in the delta that fail to fix the reported problem.
+- Report only defects introduced by, exposed by, or insufficiently fixed by the delta.
+- Cite changed delta lines as primary evidence when possible.
+- Use the full diff only for understanding context (how the delta fits into the larger change), not for re-reporting untouched pre-existing issues.
 ```
 
 ### Storage
@@ -153,20 +136,27 @@ Expected improvements:
 
 1. **Rollback changes the base** — delta is always computed from the ACTIVE best candidate, not the previous iteration. If rollback happened, delta reflects "what's different from the best candidate."
 2. **First iteration** — no delta, full diff only. Business as usual.
-3. **Engineer creates entirely new files** — delta shows the new file. Full patch also shows it. No conflict.
-4. **Delta is empty** — engineer made no changes (repair failed or no-op). This triggers the existing "REPAIR_SKIP" path.
-5. **Delta is larger than full patch** — theoretically impossible since delta is a subset of the full change. If it happens due to rollback artifacts, fall back to full-diff-only review.
+3. **Engineer creates entirely new files** — `git diff` only shows unstaged changes to tracked files. To ensure new files appear in the delta, the orchestrator runs `git add -A` before computing diffs. This already happens in the current flow.
+4. **Delta is empty** — engineer made no changes (repair failed or no-op). This triggers the existing "REPAIR_SKIP" path (see Artifact Lifecycle post-repair guard above).
+5. **Delta unexpectedly large** — if delta size exceeds 80% of full patch size, fall back to full-diff-only review for that iteration (delta is not providing meaningful focus).
+
+**Explicit diff commands:**
+- `git diff` (unstaged) — captures the iteration delta (what engineer changed from best candidate)
+- `git diff $BASE` — captures combined.patch (full feature diff from base commit)
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `commands/signum.md` | Capture `iteration_delta.patch` after repair, pass to reviewers |
+| `commands/signum.md` | Delta capture after repair (orchestrator), stale clear before repair, cleanup lists (restart + archive) |
 | `agents/reviewer-claude.md` | Add delta-aware review instructions |
 | `lib/prompts/review-template.md` | Add `{iteration_delta}` variable and focus instructions |
 | `lib/prompts/review-template-security.md` | Same |
 | `lib/prompts/review-template-performance.md` | Same |
 | `agents/synthesizer.md` | No changes needed (reads findings, not diffs) |
+| `platforms/claude-code/` | Mirror sync after implementation in commands/signum.md |
+
+Note: `agents/engineer.md` requires no changes — the orchestrator owns delta generation, not the engineer.
 
 ## What Does NOT Change
 
