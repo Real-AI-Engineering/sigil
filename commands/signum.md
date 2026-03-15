@@ -1839,9 +1839,39 @@ if [ "$NO_IMPROVE_COUNT" -ge 2 ]; then
 fi
 ```
 
+**Rollback to best candidate if current is worse:**
+
+```bash
+SKIP_ITERATION=false
+if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; then
+  echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
+  git clean -fd
+  git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
+  if git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
+    # Sync .signum/ working copies from best iteration
+    BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+    cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/execute_log.json" .signum/ 2>/dev/null || true
+    rm -f .signum/reviews/*.json
+    cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+    cp "${BEST_DIR}/audit_summary.json" .signum/ 2>/dev/null || true
+  else
+    echo "ROLLBACK_FAILED: git apply failed for iteration $BEST_ITERATION — forcing early stop"
+    NO_IMPROVE_COUNT=99
+    SKIP_ITERATION=true
+  fi
+fi
+# If rollback failed, skip repair engineer and audit re-run — the early stop condition
+# (NO_IMPROVE_COUNT=99) will terminate the loop on the next entry condition check.
+```
+
+**If `SKIP_ITERATION` is `true`, skip the repair engineer launch and all remaining steps in this iteration — proceed directly back to "Check entry conditions", which will trigger early stop due to `NO_IMPROVE_COUNT=99`.**
+
 **Build repair brief:**
 
-Use the Bash tool to construct `.signum/repair_brief.json` from the current audit summary:
+Use the Bash tool to construct `.signum/repair_brief.json` from the current audit summary (which now reflects the best candidate after any rollback):
 
 ```bash
 ITER_NUM=$((CURRENT_ITERATION + 1))
@@ -1898,36 +1928,6 @@ jq -n \
 
 echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.json) findings"
 ```
-
-**Rollback to best candidate if current is worse:**
-
-```bash
-SKIP_ITERATION=false
-if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; then
-  echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
-  git clean -fd
-  git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
-  if git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
-    # Sync .signum/ working copies from best iteration
-    BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
-    cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
-    cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
-    cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
-    cp "${BEST_DIR}/execute_log.json" .signum/ 2>/dev/null || true
-    rm -f .signum/reviews/*.json
-    cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
-    cp "${BEST_DIR}/audit_summary.json" .signum/ 2>/dev/null || true
-  else
-    echo "ROLLBACK_FAILED: git apply failed for iteration $BEST_ITERATION — forcing early stop"
-    NO_IMPROVE_COUNT=99
-    SKIP_ITERATION=true
-  fi
-fi
-# If rollback failed, skip repair engineer and audit re-run — the early stop condition
-# (NO_IMPROVE_COUNT=99) will terminate the loop on the next entry condition check.
-```
-
-**If `SKIP_ITERATION` is `true`, skip the repair engineer launch and all remaining steps in this iteration — proceed directly back to "Check entry conditions", which will trigger early stop due to `NO_IMPROVE_COUNT=99`.**
 
 **Launch repair engineer:**
 
@@ -2040,6 +2040,10 @@ echo "Iteration $ITER_NUM: decision=$NEW_DECISION score=$NEW_SCORE best=$BEST_IT
 After loop exits, ensure the best candidate is active:
 
 ```bash
+# CURRENT_ITERATION tracks the loop counter (including skipped iterations).
+# The log length tracks actual completed iterations with audit results.
+# ITERATIONS_USED is set to CURRENT_ITERATION for reporting the loop count;
+# PACK uses the log's .pass field for data lookups, so sparse logs are handled correctly.
 ITERATIONS_USED=$CURRENT_ITERATION
 
 RESTORE_FAILED=false
@@ -2347,15 +2351,17 @@ if [ "$ITERATIONS_USED_PACK" -gt 1 ] && [ -f .signum/audit_iteration_log.json ];
   PACK_TERMINAL_REASON=$(jq -r '.terminalReason // ""' .signum/audit_summary.json 2>/dev/null || echo "")
   PACK_REMAINING_SEV=$(jq -r '.remainingSeverity // "none"' .signum/audit_summary.json 2>/dev/null || echo "none")
   # Build resolvedFindings: findings present in pass 1 but absent in best pass (by fingerprint)
+  # Use .pass field lookup instead of array index to handle sparse logs from skipped iterations
   PACK_RESOLVED=$(jq -n \
     --argjson log "$(cat .signum/audit_iteration_log.json)" \
     --argjson best "$BEST_ITERATION_PACK" \
     '($log[0].canonicalFindings // []) as $first |
-     ($log[$best - 1].canonicalFindings // []) as $last |
+     (($log[] | select(.pass == $best)).canonicalFindings // []) as $last |
      ($last | map(.fingerprint // (.file + ":" + (.line|tostring) + ":" + .category))) as $lastFps |
      [$first[] | select((.fingerprint // (.file + ":" + (.line|tostring) + ":" + .category)) as $fp | $lastFps | index($fp) | not)]')
   # Build remainingFindings: findings present in the best pass
-  PACK_REMAINING=$(jq --argjson best "$BEST_ITERATION_PACK" '.[$best - 1].canonicalFindings // []' .signum/audit_iteration_log.json 2>/dev/null || echo "[]")
+  # Use .pass field lookup instead of array index to handle sparse logs from skipped iterations
+  PACK_REMAINING=$(jq --argjson best "$BEST_ITERATION_PACK" '(.[].pass as $p | select($p == $best) | .canonicalFindings) // []' .signum/audit_iteration_log.json 2>/dev/null || echo "[]")
   ITERATIVE_AUDIT_JSON=$(jq -n \
     --argjson iters_used "$ITERATIONS_USED_PACK" \
     --argjson iters_max "$PACK_ITERS_MAX" \
