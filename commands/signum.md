@@ -10,7 +10,7 @@ arguments:
     required: false
 ---
 
-# Signum v4.1: Evidence-Driven Development Pipeline
+# Signum v4.2: Evidence-Driven Development Pipeline
 
 You are the Signum orchestrator. You drive a 4-phase evidence-driven pipeline:
 
@@ -27,7 +27,7 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
 ```json
 {
   "name": "Signum",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "pipeline": ["CONTRACT", "EXECUTE", "AUDIT", "PACK"],
   "phases": {
     "CONTRACT": {
@@ -44,7 +44,8 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
     },
     "AUDIT": {
       "description": "Multi-angle verification with regression detection",
-      "steps": ["mechanic (lint/typecheck/tests vs baseline)", "holdout validation", "Claude semantic review", "Codex security review", "Gemini performance review", "synthesizer consensus"],
+      "iterativeAudit": "review-fix loop with best-of-N selection",
+      "steps": ["mechanic (lint/typecheck/tests vs baseline)", "holdout validation", "Claude semantic review", "Codex security review", "Gemini performance review", "synthesizer consensus", "iterative review-fix loop (up to 20 iterations)"],
       "duration": "1-3 min (risk-proportional)",
       "approvals": 0
     },
@@ -105,6 +106,7 @@ cp "${DIR}audit_summary.json" "$ARCHIVE_DIR" 2>/dev/null || true
 
 # Purge intermediate artifacts (reviews, baseline, holdout, execute_log, prompts)
 rm -rf "${DIR}reviews/" 2>/dev/null || true
+rm -rf "${DIR}iterations/" 2>/dev/null || true
 rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json" \
       "${DIR}mechanic_report.json" "${DIR}combined.patch" \
       "${DIR}contract-engineer.json" "${DIR}contract-policy.json" \
@@ -360,7 +362,9 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch \
        .signum/reviews/claude.json .signum/reviews/codex.json .signum/reviews/gemini.json \
        .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
        .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt \
-       .signum/clover_report.json .signum/approval.json
+       .signum/clover_report.json .signum/approval.json \
+       .signum/audit_iteration_log.json .signum/flaky_tests.json .signum/repair_brief.json
+rm -rf .signum/iterations/
 ```
 
 ---
@@ -1528,8 +1532,6 @@ Save CODEX_AVAILABLE and GEMINI_AVAILABLE for use in the next step.
 
 ### Step 3.2.5: Launch reviews
 
-**Fresh-reviewer rule:** If the Engineer used more than 1 attempt (check `totalAttempts` in `.signum/execute_log.json`), use `model: "sonnet"` for the Claude reviewer agent instead of the default opus. This ensures a fresh perspective on retry code rather than the same model re-reviewing similar output.
-
 **Risk-proportional launch:**
 - **Low risk:** Launch Claude reviewer ONLY (foreground, not background). Write UNAVAILABLE stubs for codex and gemini immediately. Skip to Step 3.3 (no TaskOutput wait needed since Claude ran foreground, but still verify claude.json output).
 - **Medium/High risk:** Use a single message with multiple tool use blocks to launch all available reviewers simultaneously. Do NOT wait between launches.
@@ -1537,8 +1539,6 @@ Save CODEX_AVAILABLE and GEMINI_AVAILABLE for use in the next step.
 For medium/high risk, launch the reviewer-claude Agent with `run_in_background: true`, the Codex Bash with `run_in_background: true`, and the Gemini Bash with `run_in_background: true` — all in the same message:
 
 **Claude (Agent tool, `run_in_background: true`):**
-
-If Engineer used >1 attempt, add `model: "sonnet"` to the Agent tool call.
 
 ```
 Read .signum/contract.json, .signum/combined.patch, and .signum/mechanic_report.json.
@@ -1720,6 +1720,307 @@ jq -r '"=== AUDIT SUMMARY ===",
        "Reasoning: " + .reasoning' \
   .signum/audit_summary.json
 ```
+
+### Step 3.6: Iterative AUDIT Loop
+
+After synthesizer produces the audit summary, check if iterative repair is needed.
+
+Read the iteration config:
+
+```bash
+MAX_ITERATIONS=${SIGNUM_AUDIT_MAX_ITERATIONS:-20}
+CURRENT_ITERATION=1
+BEST_SCORE=0
+BEST_ITERATION=0
+NO_IMPROVE_COUNT=0
+echo "Iterative AUDIT config: max_iterations=$MAX_ITERATIONS"
+```
+
+Check the audit summary decision and findings:
+
+```bash
+AUDIT_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+HAS_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR" or .severity == "CRITICAL")] | length' .signum/audit_summary.json)
+HAS_REGRESSIONS=$(jq -r '.mechanic' .signum/audit_summary.json | grep -q "regression" && echo "true" || echo "false")
+HOLDOUT_FAILURES=$(jq -r '.holdout.failed // 0' .signum/audit_summary.json)
+ITERATION_SCORE=$(jq -r '.iterationScore // 0' .signum/audit_summary.json)
+
+echo "Pass 1: decision=$AUDIT_DECISION major_findings=$HAS_MAJOR regressions=$HAS_REGRESSIONS holdout_failures=$HOLDOUT_FAILURES score=$ITERATION_SCORE"
+```
+
+**If `AUDIT_DECISION` is `AUTO_OK`, or if there are no MAJOR/CRITICAL findings AND no mechanic regressions AND no holdout failures → proceed directly to Phase 4 (PACK).**
+
+Otherwise, enter the iterative repair loop:
+
+#### Step 3.6.1: Initialize iteration tracking
+
+```bash
+# Store pass 1 artifacts
+mkdir -p .signum/iterations/01/reviews
+cp .signum/combined.patch .signum/iterations/01/
+cp .signum/mechanic_report.json .signum/iterations/01/
+cp .signum/holdout_report.json .signum/iterations/01/ 2>/dev/null || true
+cp .signum/reviews/*.json .signum/iterations/01/reviews/ 2>/dev/null || true
+cp .signum/audit_summary.json .signum/iterations/01/
+
+# Initialize iteration log
+BEST_SCORE=$ITERATION_SCORE
+BEST_ITERATION=1
+jq -n --argjson score "$ITERATION_SCORE" \
+  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'"}]' \
+  > .signum/audit_iteration_log.json
+
+echo "Iteration 1 stored. Best score: $BEST_SCORE"
+```
+
+#### Step 3.6.2: Repair loop
+
+For each iteration from 2 to MAX_ITERATIONS:
+
+**Check entry conditions:**
+
+```bash
+# Skip if already clean
+if [ "$AUDIT_DECISION" = "AUTO_OK" ]; then
+  echo "Clean result at iteration $CURRENT_ITERATION. Exiting loop."
+  break
+fi
+
+# Early stop: 2 consecutive non-improving iterations
+if [ "$NO_IMPROVE_COUNT" -ge 2 ]; then
+  echo "Early stop: no improvement for 2 consecutive iterations."
+  break
+fi
+```
+
+**Build repair brief:**
+
+Use the Bash tool to construct `.signum/repair_brief.json` from the current audit summary:
+
+```bash
+ITER_NUM=$((CURRENT_ITERATION + 1))
+
+# Extract MAJOR+ findings from all reviewers
+FINDINGS=$(jq '[.reviews | to_entries[] | .value.findings[]? | select(.severity == "MAJOR" or .severity == "CRITICAL") | {fingerprint: .fingerprint, severity: .severity, category: .category, file: .file, line: .line, comment: .comment, evidence: .evidence}]' .signum/audit_summary.json)
+
+# Sanitize holdout summary (category only, no details)
+HOLDOUT_SUMMARY=""
+if [ -f .signum/holdout_report.json ]; then
+  HOLDOUT_FAILED=$(jq '.failed // 0' .signum/holdout_report.json)
+  if [ "$HOLDOUT_FAILED" -gt 0 ]; then
+    # Extract categories via keyword matching on descriptions
+    HOLDOUT_CATS=$(jq -r '[.results[] | select(.status != "PASS") | .description | ascii_downcase |
+      if test("boundary|edge case|limit") then "boundary input"
+      elif test("error|exception|fail") then "error handling"
+      elif test("concurrent|race|parallel") then "concurrency"
+      elif test("empty|null|missing") then "null/empty input"
+      else "unspecified" end] | unique | join(", ")' .signum/holdout_report.json)
+    HOLDOUT_SUMMARY="${HOLDOUT_FAILED} holdout(s) failed (categories: ${HOLDOUT_CATS})"
+  fi
+fi
+
+# Build mechanic regression summary
+MECH_SUMMARY=""
+MECH_REG=$(jq -r '.hasRegressions' .signum/mechanic_report.json)
+if [ "$MECH_REG" = "true" ]; then
+  MECH_SUMMARY=$(jq -r '
+    [if .lint.regression then "lint regression" else empty end,
+     if .typecheck.regression then "typecheck regression" else empty end,
+     if .tests.regression then "test regression (" + (.tests.newFailures | length | tostring) + " new failures)" else empty end
+    ] | join(", ")' .signum/mechanic_report.json)
+fi
+
+jq -n \
+  --argjson iteration "$ITER_NUM" \
+  --argjson findings "$FINDINGS" \
+  --arg holdout_summary "$HOLDOUT_SUMMARY" \
+  --arg mechanic_summary "$MECH_SUMMARY" \
+  '{
+    iteration: $iteration,
+    deterministicFailures: {
+      mechanic: (if $mechanic_summary != "" then $mechanic_summary else null end),
+      holdout: (if $holdout_summary != "" then $holdout_summary else null end)
+    },
+    reviewFindings: $findings,
+    constraints: [
+      "Fix ONLY the listed findings",
+      "Minimal diff — no unrelated refactors",
+      "Do not break already-passing acceptance criteria",
+      "Re-run visible AC verifies after fix"
+    ]
+  }' > .signum/repair_brief.json
+
+echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.json) findings"
+```
+
+**Rollback to best candidate if current is worse:**
+
+```bash
+if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; then
+  echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
+  git clean -fd
+  git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
+  git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch
+  # Sync .signum/ working copies from best iteration
+  BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+  cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
+  cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+  cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+  cp "${BEST_DIR}/audit_summary.json" .signum/ 2>/dev/null || true
+fi
+```
+
+**Launch repair engineer:**
+
+Use the Agent tool to launch the "engineer" agent with this prompt:
+
+```
+Read .signum/contract-engineer.json for scope and acceptance criteria.
+Read .signum/baseline.json for pre-existing check state.
+Read .signum/repair_brief.json for the specific issues to fix.
+Fix ONLY the issues listed in the repair brief. Do not refactor, do not add features.
+After fixing, run the visible AC verifies to confirm you didn't break them.
+Write .signum/combined.patch and .signum/execute_log.json.
+```
+
+**After engineer completes, re-run the full audit subpipeline:**
+
+Re-run Steps 2.4 (scope gate), 2.5 (policy compliance if applicable), 3.0.5 (repo-contract invariants), 3.1 (mechanic), 3.1.5 (holdout validation), 3.2-3.3.5 (reviews — risk-proportional), and 3.5 (synthesizer).
+
+Pass `currentIteration` to the synthesizer prompt:
+
+```
+Read .signum/mechanic_report.json, .signum/reviews/claude.json,
+.signum/reviews/codex.json, .signum/reviews/gemini.json,
+.signum/holdout_report.json, .signum/execute_log.json,
+and .signum/audit_iteration_log.json.
+Current iteration: <N>.
+Apply deterministic synthesis rules, compute confidence and iteration scores,
+and write .signum/audit_summary.json.
+```
+
+**After synthesizer, store iteration artifacts and update tracking:**
+
+```bash
+ITER_DIR=".signum/iterations/$(printf '%02d' $ITER_NUM)"
+mkdir -p "$ITER_DIR/reviews"
+cp .signum/combined.patch "$ITER_DIR/"
+cp .signum/mechanic_report.json "$ITER_DIR/"
+cp .signum/holdout_report.json "$ITER_DIR/" 2>/dev/null || true
+cp .signum/reviews/*.json "$ITER_DIR/reviews/" 2>/dev/null || true
+cp .signum/audit_summary.json "$ITER_DIR/"
+cp .signum/repair_brief.json "$ITER_DIR/"
+
+# Read new score
+NEW_SCORE=$(jq -r '.iterationScore // 0' .signum/audit_summary.json)
+NEW_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+
+# Update iteration log
+jq --argjson score "$NEW_SCORE" --arg decision "$NEW_DECISION" --argjson pass "$ITER_NUM" \
+  '. + [{"pass": $pass, "score": $score, "decision": $decision}]' \
+  .signum/audit_iteration_log.json > .signum/audit_iteration_log.json.tmp \
+  && mv .signum/audit_iteration_log.json.tmp .signum/audit_iteration_log.json
+
+# Update best tracking
+if [ "$NEW_SCORE" -gt "$BEST_SCORE" ] || [ "$NEW_SCORE" -eq "$BEST_SCORE" -a "$ITER_NUM" -le "$BEST_ITERATION" ]; then
+  BEST_SCORE=$NEW_SCORE
+  BEST_ITERATION=$ITER_NUM
+  NO_IMPROVE_COUNT=0
+  echo "New best: iteration $BEST_ITERATION (score $BEST_SCORE)"
+else
+  NO_IMPROVE_COUNT=$((NO_IMPROVE_COUNT + 1))
+  echo "No improvement ($NO_IMPROVE_COUNT consecutive). Best remains iteration $BEST_ITERATION (score $BEST_SCORE)"
+fi
+
+CURRENT_ITERATION=$ITER_NUM
+AUDIT_DECISION=$NEW_DECISION
+ITERATION_SCORE=$NEW_SCORE
+
+echo "Iteration $ITER_NUM: decision=$NEW_DECISION score=$NEW_SCORE best=$BEST_ITERATION"
+```
+
+**Repeat** from "Check entry conditions" until loop exits.
+
+#### Step 3.6.3: Finalize iterative AUDIT
+
+After loop exits, ensure the best candidate is active:
+
+```bash
+ITERATIONS_USED=$CURRENT_ITERATION
+
+if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
+  echo "Restoring best candidate from iteration $BEST_ITERATION"
+  git clean -fd
+  git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
+  git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch || {
+    echo "ERROR: Failed to apply best candidate patch"
+    # Terminal HUMAN_REVIEW
+  }
+  # Sync working copies
+  BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+  cp "${BEST_DIR}/combined.patch" .signum/
+  cp "${BEST_DIR}/mechanic_report.json" .signum/
+  cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+  cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+  cp "${BEST_DIR}/audit_summary.json" .signum/
+fi
+
+# Determine terminal decision from best candidate
+FINAL_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+EARLY_STOP=$( [ "$NO_IMPROVE_COUNT" -ge 2 ] && echo "true" || echo "false" )
+EARLY_STOP_REASON=""
+[ "$EARLY_STOP" = "true" ] && EARLY_STOP_REASON="no improvement for 2 consecutive iterations"
+[ "$CURRENT_ITERATION" -ge "$MAX_ITERATIONS" ] && EARLY_STOP="true" && EARLY_STOP_REASON="max iterations reached"
+
+# Terminal override based on remaining findings in best candidate
+REMAINING_CRITICAL=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL")] | length' .signum/audit_summary.json)
+REMAINING_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
+REMAINING_MINOR=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
+
+if [ "$REMAINING_CRITICAL" -gt 0 ]; then
+  FINAL_DECISION="AUTO_BLOCK"
+  REMAINING_SEV="CRITICAL"
+elif [ "$REMAINING_MAJOR" -gt 0 ]; then
+  FINAL_DECISION="HUMAN_REVIEW"
+  REMAINING_SEV="MAJOR"
+elif [ "$REMAINING_MINOR" -gt 0 ]; then
+  FINAL_DECISION="AUTO_OK"
+  REMAINING_SEV="MINOR"
+else
+  FINAL_DECISION="AUTO_OK"
+  REMAINING_SEV="none"
+fi
+
+# Update audit_summary with iteration metadata
+jq --argjson iters_used "$ITERATIONS_USED" \
+   --argjson iters_max "$MAX_ITERATIONS" \
+   --argjson best "$BEST_ITERATION" \
+   --arg early_stop "$EARLY_STOP" \
+   --arg early_stop_reason "$EARLY_STOP_REASON" \
+   --arg remaining_sev "$REMAINING_SEV" \
+   --arg final_decision "$FINAL_DECISION" \
+   --arg terminal_reason "$REMAINING_MAJOR MAJOR + $REMAINING_CRITICAL CRITICAL findings persist after $ITERATIONS_USED iterations" \
+   '. + {
+     decision: $final_decision,
+     iterationsUsed: $iters_used,
+     iterationsMax: $iters_max,
+     bestIteration: $best,
+     earlyStop: ($early_stop == "true"),
+     earlyStopReason: (if $early_stop_reason != "" then $early_stop_reason else null end),
+     terminalReason: (if $final_decision != "AUTO_OK" then $terminal_reason else null end),
+     remainingSeverity: $remaining_sev
+   }' .signum/audit_summary.json > .signum/audit_summary.json.tmp \
+   && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
+
+echo "=== ITERATIVE AUDIT COMPLETE ==="
+echo "Iterations: $ITERATIONS_USED/$MAX_ITERATIONS (best: $BEST_ITERATION)"
+echo "Early stop: $EARLY_STOP ${EARLY_STOP_REASON:+($EARLY_STOP_REASON)}"
+echo "Final decision: $FINAL_DECISION (remaining: $REMAINING_SEV)"
+```
+
+Display the final audit summary (same display as after Step 3.5).
+
+Proceed to Phase 4: PACK.
 
 ---
 

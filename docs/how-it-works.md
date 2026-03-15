@@ -73,6 +73,23 @@ Codex and Gemini receive only the goal and diff — no contract details, no mech
 
 The synthesizer also computes a confidence score (0-100) based on execution health, baseline stability, and review alignment.
 
+#### Iterative Review-Fix Loop (v4.2+)
+
+If the synthesizer finds MAJOR or CRITICAL issues, the AUDIT phase enters an iterative repair loop instead of stopping:
+
+1. Findings are collected into a **repair brief** (sanitized — holdout details are never revealed)
+2. A fresh Engineer agent fixes the specific findings
+3. Full safety chain re-runs: scope gate → policy → mechanic → holdouts → all reviews → synthesizer
+4. If clean → proceed to PACK. If still issues → iterate again (up to `SIGNUM_AUDIT_MAX_ITERATIONS`, default 20)
+5. **Best-of-N**: each iteration is scored; the pipeline keeps the best candidate, not the last
+6. **Early stop**: if no improvement for 2 consecutive iterations, stop automatically
+
+After max iterations, terminal decision based on the best candidate:
+- Clean → AUTO_OK
+- Only MINOR remaining → AUTO_OK with remaining findings noted
+- MAJOR remaining → HUMAN_REVIEW
+- CRITICAL remaining → AUTO_BLOCK
+
 ### Phase 4: PACK
 
 Embeds all artifacts into a single self-contained `proofpack.json`. Each artifact is wrapped in an envelope with SHA-256 checksum and size:
@@ -130,6 +147,10 @@ All artifacts are written to `.signum/` (auto-added to `.gitignore`):
 | `reviews/*.json` | AUDIT | Per-provider findings (specialized templates) |
 | `audit_summary.json` | AUDIT | Verdict with confidence scores |
 | `proofpack.json` | PACK | Final CI-gate artifact |
+| `iterations/NN/` | AUDIT | Per-iteration snapshots (v4.2+, only when iterative) |
+| `audit_iteration_log.json` | AUDIT | Summary of all iterations (v4.2+) |
+| `repair_brief.json` | AUDIT | Current repair brief for engineer (v4.2+) |
+| `flaky_tests.json` | AUDIT | Flaky test tracker (v4.2+, run-local) |
 
 ## Cost Estimates
 
@@ -157,10 +178,9 @@ No telemetry. No analytics. No phone-home.
 
 ## Limitations
 
-- **Sequential execution**: CLI adapters for Codex and Gemini run sequentially, not in parallel. A 3-provider audit adds wall-clock time proportional to diff size.
 - **CLI fragility**: External reviews depend on Codex/Gemini CLI auth state and version compatibility. Signum degrades gracefully but cannot guarantee external availability.
 - **200K context limit**: Very large diffs (>10K lines) may exceed model context windows. The contract + diff must fit within 200K tokens.
 - **Heuristic risk**: Risk level is computed from file count and keyword patterns, not semantic analysis. It can under-estimate novel refactors.
-- **Interactive only**: Runs inside Claude Code sessions. Not suitable for unattended CI pipelines.
 - **Finding validation**: Catches hallucinated file paths and line ranges, but cannot verify logical correctness of a finding's claim.
-- **Single execution path**: v4 runs one implementation strategy. Multi-path execution (parallel strategies with winner selection) is planned for v4.1.
+- **Iterative cost**: With iterative AUDIT (v4.2), high-risk tasks may run multiple review cycles. Cost scales with iterations used. Early stop limits waste but does not eliminate it.
+- **Flaky test handling**: Per-test retry is pytest-only in v4.2. Other runners use suite-level detection.

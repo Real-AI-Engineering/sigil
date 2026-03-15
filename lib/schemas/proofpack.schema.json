@@ -27,7 +27,7 @@
     }
   },
   "properties": {
-    "schemaVersion": { "type": "string", "enum": ["4.0", "4.1"] },
+    "schemaVersion": { "type": "string", "enum": ["4.0", "4.1", "4.2"] },
     "signumVersion": { "type": "string" },
     "createdAt": { "type": "string", "format": "date-time" },
     "runId": { "type": "string", "pattern": "^signum-" },
@@ -92,6 +92,68 @@
         },
         "auditSummary": { "$ref": "#/definitions/envelope" }
       }
+    },
+    "iterativeAudit": {
+      "type": "object",
+      "description": "Iterative AUDIT metadata (v4.2+). Present only when AUDIT ran >1 iteration.",
+      "properties": {
+        "iterationsUsed": { "type": "integer", "minimum": 1 },
+        "iterationsMax": { "type": "integer", "minimum": 1 },
+        "bestIteration": { "type": "integer", "minimum": 1 },
+        "earlyStop": { "type": "boolean" },
+        "earlyStopReason": { "type": "string" },
+        "terminalReason": { "type": "string" },
+        "remainingSeverity": { "type": "string", "enum": ["MINOR", "MAJOR", "CRITICAL", "none"] },
+        "auditIterations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pass", "score", "findingsCount", "decision"],
+            "properties": {
+              "pass": { "type": "integer", "minimum": 1 },
+              "score": { "type": "integer", "maximum": 0 },
+              "findingsCount": {
+                "type": "object",
+                "properties": {
+                  "critical": { "type": "integer", "minimum": 0 },
+                  "major": { "type": "integer", "minimum": 0 },
+                  "minor": { "type": "integer", "minimum": 0 }
+                }
+              },
+              "mechanicRegressions": { "type": "boolean" },
+              "holdoutFailures": { "type": "integer", "minimum": 0 },
+              "decision": { "type": "string" }
+            }
+          }
+        },
+        "resolvedFindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fingerprint": { "type": "string" },
+              "category": { "type": "string" },
+              "file": { "type": "string" },
+              "severity": { "type": "string" },
+              "resolvedInPass": { "type": "integer" }
+            }
+          }
+        },
+        "remainingFindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fingerprint": { "type": "string" },
+              "category": { "type": "string" },
+              "file": { "type": "string" },
+              "severity": { "type": "string" },
+              "comment": { "type": "string" }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

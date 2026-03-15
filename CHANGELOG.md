@@ -1,5 +1,28 @@
 # Changelog
 
+## v4.2.0 (2026-03-15)
+
+### Added
+- **Iterative AUDIT**: review-fix loop in Phase 3 — engineer fixes MAJOR/CRITICAL findings, full re-review each iteration until convergence or max iterations (default 20)
+- `SIGNUM_AUDIT_MAX_ITERATIONS` env var for configurable iteration cap
+- `SIGNUM_CI_RELAXED` env var — HUMAN_REVIEW maps to exit 0 in relaxed mode
+- Engineer repair mode: reads `repair_brief.json` to fix specific findings
+- Per-iteration artifact storage in `.signum/iterations/NN/`
+- `audit_iteration_log.json` for cross-iteration tracking
+- Best-of-N with rollback: pipeline keeps best candidate, not last attempt
+- Early stop: halts if no improvement for 2 consecutive iterations
+- Finding fingerprints for cross-iteration resolved/persisting/new tracking
+- Holdout sanitization: engineer sees category only, never hidden test details
+- Flaky test retry (pytest-only): retry 2x before counting as regression
+- `flaky_tests.json` for run-local flaky test tracking
+- `iterativeAudit` section in proofpack schema (v4.2)
+
+### Changed
+- Proofpack schema bumped to v4.2 (backward compatible with 4.0/4.1)
+- Synthesizer is now iteration-aware: computes `iterationScore`, tracks findings across passes
+- Fresh-reviewer rule removed — Claude reviewer always uses Opus
+- Archive/restart cleanup includes iteration artifacts
+
 ## v4.1.0 (2026-03-09)
 
 ### Security
