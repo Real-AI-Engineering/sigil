@@ -108,7 +108,7 @@ cp "${DIR}audit_summary.json" "$ARCHIVE_DIR" 2>/dev/null || true
 rm -rf "${DIR}reviews/" 2>/dev/null || true
 rm -rf "${DIR}iterations/" 2>/dev/null || true
 rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json" \
-      "${DIR}mechanic_report.json" "${DIR}combined.patch" \
+      "${DIR}mechanic_report.json" "${DIR}combined.patch" "${DIR}iteration_delta.patch" \
       "${DIR}contract-engineer.json" "${DIR}contract-policy.json" \
       "${DIR}policy_violations.json" "${DIR}spec_quality.json" \
       "${DIR}spec_validation.json" "${DIR}clover_report.json" \
@@ -352,7 +352,7 @@ If contract.json exists, ask the user: "A previous contract exists in .signum/co
 Wait for the user's answer before continuing. If restart, delete the existing artifacts:
 
 ```bash
-rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch \
+rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch .signum/iteration_delta.patch \
        .signum/baseline.json .signum/mechanic_report.json \
        .signum/audit_summary.json .signum/proofpack.json \
        .signum/holdout_report.json \
@@ -2044,11 +2044,13 @@ which gemini > /dev/null 2>&1 && GEMINI_AVAILABLE=true || GEMINI_AVAILABLE=false
 
 if [ "$CODEX_AVAILABLE" = "true" ]; then
   python3 -c "
-import json, sys
+import json, sys, os
 goal = json.load(open('.signum/contract.json'))['goal']
 diff = open('.signum/combined.patch').read()
+delta_path = '.signum/iteration_delta.patch'
+delta = open(delta_path).read() if os.path.exists(delta_path) else ''
 tmpl = open('lib/prompts/review-template-security.md').read()
-print(tmpl.replace('{goal}', goal).replace('{diff}', diff))
+print(tmpl.replace('{goal}', goal).replace('{diff}', diff).replace('{iteration_delta}', delta))
 " > .signum/review_prompt_codex.txt
   echo "codex: AVAILABLE, prompt written"
 else
@@ -2057,11 +2059,13 @@ fi
 
 if [ "$GEMINI_AVAILABLE" = "true" ]; then
   python3 -c "
-import json, sys
+import json, sys, os
 goal = json.load(open('.signum/contract.json'))['goal']
 diff = open('.signum/combined.patch').read()
+delta_path = '.signum/iteration_delta.patch'
+delta = open(delta_path).read() if os.path.exists(delta_path) else ''
 tmpl = open('lib/prompts/review-template-performance.md').read()
-print(tmpl.replace('{goal}', goal).replace('{diff}', diff))
+print(tmpl.replace('{goal}', goal).replace('{diff}', diff).replace('{iteration_delta}', delta))
 " > .signum/review_prompt_gemini.txt
   echo "gemini: AVAILABLE, prompt written"
 else
@@ -2085,6 +2089,7 @@ For medium/high risk, launch the reviewer-claude Agent with `run_in_background: 
 
 ```
 Read .signum/contract.json, .signum/combined.patch, and .signum/mechanic_report.json.
+Also read .signum/iteration_delta.patch if it exists.
 Follow lib/prompts/review-template.md and write your review to .signum/reviews/claude.json.
 Write ONLY the JSON object, no markers, no markdown.
 ```
@@ -2371,6 +2376,7 @@ if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; t
     # Sync .signum/ working copies from best iteration
     BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
     cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/iteration_delta.patch" .signum/ 2>/dev/null || rm -f .signum/iteration_delta.patch
     cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
     cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
     cp "${BEST_DIR}/execute_log.json" .signum/ 2>/dev/null || true
@@ -2453,7 +2459,7 @@ echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.j
 
 ```bash
 # Remove stale artifacts so the success gate cannot accept leftovers from prior iterations
-rm -f .signum/execute_log.json .signum/combined.patch
+rm -f .signum/execute_log.json .signum/combined.patch .signum/iteration_delta.patch
 ```
 
 **Launch repair engineer:**
@@ -2490,6 +2496,25 @@ if [ ! -f .signum/combined.patch ]; then
   continue
 fi
 echo "Repair engineer succeeded for iteration $ITER_NUM — proceeding to audit"
+
+# Capture iteration delta before re-running audit
+BASE=$(jq -r '.base_commit' .signum/execution_context.json)
+git diff > .signum/iteration_delta.patch 2>/dev/null || true
+DELTA_SIZE=$(wc -c < .signum/iteration_delta.patch 2>/dev/null || echo 0)
+FULL_SIZE=$(wc -c < .signum/combined.patch 2>/dev/null || echo 0)
+echo "Delta: $DELTA_SIZE bytes, Full: $FULL_SIZE bytes"
+
+if [ "$DELTA_SIZE" -eq 0 ]; then
+  echo "Delta empty — marking as non-improving"
+  NO_IMPROVE_COUNT=$((NO_IMPROVE_COUNT + 1))
+  CURRENT_ITERATION=$ITER_NUM
+  continue
+fi
+
+if [ "$FULL_SIZE" -gt 0 ] && [ $((DELTA_SIZE * 100 / FULL_SIZE)) -gt 80 ]; then
+  echo "Delta >80% of full patch — full-diff-only review for this iteration"
+  rm -f .signum/iteration_delta.patch
+fi
 ```
 
 **Re-run the full audit subpipeline:**
@@ -2514,6 +2539,7 @@ and write .signum/audit_summary.json.
 ITER_DIR=".signum/iterations/$(printf '%02d' $ITER_NUM)"
 mkdir -p "$ITER_DIR/reviews"
 cp .signum/combined.patch "$ITER_DIR/"
+cp .signum/iteration_delta.patch "$ITER_DIR/" 2>/dev/null || true
 cp .signum/mechanic_report.json "$ITER_DIR/"
 cp .signum/holdout_report.json "$ITER_DIR/" 2>/dev/null || true
 cp .signum/execute_log.json "$ITER_DIR/" 2>/dev/null || true
@@ -2585,6 +2611,7 @@ if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
   # Always sync audit artifacts from best iteration so PACK reads consistent data
   BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
   cp "${BEST_DIR}/combined.patch" .signum/
+  cp "${BEST_DIR}/iteration_delta.patch" .signum/ 2>/dev/null || rm -f .signum/iteration_delta.patch
   cp "${BEST_DIR}/mechanic_report.json" .signum/
   cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
   cp "${BEST_DIR}/execute_log.json" .signum/ 2>/dev/null || true
