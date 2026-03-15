@@ -5,7 +5,7 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.1.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.6.0-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
 
 ```bash
@@ -69,6 +69,14 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 
 **Project intent alignment** — If the target project has a `project.intent.md` at its root, the contractor reads it before generating contracts. Non-goals and glossary terms flow into contract scope and terminology. For medium/high-risk tasks, missing project intent triggers a blocking question. An LLM-based alignment check warns when the contract diverges from project goals.
 
+**Glossary enforcement** — A `project.glossary.json` at the project root defines canonical terms and forbidden synonyms. `glossary_check` scans contracts for alias usage, `terminology_consistency_check` detects synonym proliferation across active contracts. Both are WARN-only.
+
+**Cross-contract coherence** — `overlap_check` detects inScope file overlap between active contracts. `assumption_check` flags contradictions in assumptions across related contracts. `adr_check` warns when relevant ADRs exist but aren't referenced. Contract lineage is tracked via `parentContractId`, `relatedContractIds`, and `interfacesTouched`.
+
+**Upstream staleness detection** — Contractor computes SHA-256 over upstream artifacts (`project.intent.md`, `project.glossary.json`) at contract creation. `staleness_check` recomputes the hash at execution time. Configurable policy: `warn` (default) or `block`.
+
+**Within-task refinement** — For medium/high-risk tasks, the contractor runs a 4-pass self-critique (ambiguity, missing-input, contradiction, coverage), capped at 2 auto-revision rounds. Typed findings and a `readinessForPlanning` gate are written to the contract.
+
 **Data-level blinding** — The Engineer reads `contract-engineer.json`, not `contract.json`. Holdout scenarios are physically removed from the file — not hidden by instruction. The agent cannot infer them from context or structure.
 
 **Execution policy** — `contract-policy.json` is derived from the contract before EXECUTE begins. It defines which tools the Engineer may use, which bash commands are denied, and which paths are in scope. Policy violations after execution are `AUTO_BLOCK`.
@@ -98,6 +106,13 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 │  PHASE 1: CONTRACT                                      │
 │                                                         │
 │  Contractor → spec quality gate (A–F)                  │
+│            → prose check (lib/prose-check.sh)           │
+│            → glossary check (lib/glossary-check.sh)     │
+│            → terminology check (lib/terminology-check.sh)│
+│            → overlap check (lib/overlap-check.sh)       │
+│            → assumption check (lib/assumption-check.sh) │
+│            → ADR check (lib/adr-check.sh)               │
+│            → staleness check (lib/staleness-check.sh)   │
 │            → spec validation (Codex + Gemini, parallel) │
 │            → holdout count gate (by risk level)         │
 │            → [user approval + contract-hash.txt]        │
