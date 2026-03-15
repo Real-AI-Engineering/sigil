@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "3.7",
+  "contractId": "sig-20260315-c7e1",
+  "status": "draft",
+  "timestamps": {
+    "createdAt": "2026-03-15T12:00:00Z"
+  },
+  "goal": "Add rate-limiting middleware to the API gateway to prevent abuse from high-frequency clients.",
+  "inScope": [
+    "src/middleware/rate-limit.ts",
+    "src/gateway/index.ts",
+    "tests/middleware/rate-limit.test.ts"
+  ],
+  "outOfScope": [
+    "Distributed rate-limit state (Redis/Memcached) — in-memory only for this phase",
+    "Per-user quota billing integration"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "AC01",
+      "description": "Rate-limit middleware rejects requests exceeding 100 req/min per IP with HTTP 429.",
+      "visibility": "visible",
+      "verify": {
+        "steps": [
+          {
+            "exec": { "argv": ["test", "-f", "src/middleware/rate-limit.ts"] },
+            "capture": "file_exists"
+          },
+          {
+            "expect": { "source": "file_exists", "exit_code": 0 }
+          }
+        ],
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "AC02",
+      "description": "Gateway index imports and registers the rate-limit middleware.",
+      "visibility": "visible",
+      "verify": {
+        "steps": [
+          {
+            "exec": { "argv": ["test", "-f", "src/gateway/index.ts"] },
+            "capture": "gw_exists"
+          },
+          {
+            "expect": { "source": "gw_exists", "exit_code": 0 }
+          }
+        ],
+        "timeout_ms": 5000
+      }
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A01",
+      "text": "The API gateway uses Express.js middleware chain."
+    },
+    {
+      "id": "A02",
+      "text": "In-memory storage is acceptable for rate-limit counters in this phase."
+    }
+  ],
+  "riskLevel": "medium",
+  "riskSignals": [
+    "middleware changes affect all routes",
+    "2 languages (TypeScript + tests)"
+  ],
+  "ambiguityCandidates": [
+    {
+      "text": "high-frequency clients",
+      "location": "goal",
+      "severity": "medium"
+    },
+    {
+      "text": "100 req/min per IP",
+      "location": "AC01.description",
+      "severity": "low"
+    }
+  ],
+  "contradictionsFound": [],
+  "clarificationDecisions": [
+    {
+      "question": "Should rate limits apply per IP or per authenticated user?",
+      "decision": "Per IP, as no authentication context is specified in the request.",
+      "rationale": "Goal says 'high-frequency clients' without mentioning user identity; IP is the available identifier."
+    }
+  ],
+  "assumptionProvenance": [
+    {
+      "id": "A01",
+      "text": "The API gateway uses Express.js middleware chain.",
+      "source": "codebase_scan",
+      "confidence": "high"
+    },
+    {
+      "id": "A02",
+      "text": "In-memory storage is acceptable for rate-limit counters in this phase.",
+      "source": "user_request",
+      "confidence": "high"
+    }
+  ],
+  "readinessForPlanning": {
+    "verdict": "go",
+    "summary": "No unresolved high-severity ambiguities or contradictions found; contract is ready for execution."
+  }
+}

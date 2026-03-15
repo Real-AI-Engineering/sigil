@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.6.0] - 2026-03-15
+
+### Added
+- Contract schema v3.7: five new optional top-level fields for Phase 5 Within-Task Refinement Loop:
+  - `ambiguityCandidates` (array of `{text, location, severity}`) — ambiguous phrases flagged during ambiguity review pass
+  - `contradictionsFound` (array of `{claim_a, claim_b, type}`) — contradictions flagged during contradiction review pass
+  - `clarificationDecisions` (array of `{question, decision, rationale}`) — inline clarifications resolved during missing-input review pass
+  - `assumptionProvenance` (array of `{id, text, source, confidence}`) — typed provenance records for assumptions from goal reconstruction pass
+  - `readinessForPlanning` (object with `verdict: "go"|"no-go"` and `summary`) — computed gate after all critique passes
+- Contractor agent step 3.6: 4-pass self-critique loop (medium/high risk only):
+  - Pass 1 — ambiguity review: flags ambiguous phrases in goal, ACs, scope
+  - Pass 2 — missing-input review: checks for missing preconditions; records clarification decisions
+  - Pass 3 — contradiction review: detects goal/scope/risk contradictions
+  - Pass 4 — goal reconstruction / coverage review: reconstructs goal from ACs; records assumption provenance
+  - Auto-revision capped at maximum of 2 rounds; escalates to user when verdict remains `"no-go"` after 2 rounds
+  - Low-risk contracts skip all 4 critique passes (no overhead for simple tasks)
+- Contractor writes all four typed findings arrays and `readinessForPlanning` to contract.json output
+- Orchestrator surfaces `readinessForPlanning.verdict` and summary in the Phase 1 human approval prompt
+
+### Changed
+- Contract schema bumped to v3.7 (backward compatible with v3.0–v3.6)
+
 ## [4.5.0] - 2026-03-15
 
 ### Added
