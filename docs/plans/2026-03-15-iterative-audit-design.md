@@ -44,6 +44,12 @@ Terminal decision (based on best-of-N candidate):
   → CRITICAL remaining       → AUTO_BLOCK
 ```
 
+## Conventions
+
+- **Numbering**: pass 1 = iteration 1 (the initial EXECUTE candidate). Iteration 2 = first fix attempt. `iterations/01/` stores pass 1 artifacts, `iterations/02/` stores pass 2, etc.
+- **Branch point**: iteration loop begins immediately after Step 3.5 (synthesizer). If synthesizer decision is AUTO_OK or only MINOR findings remain → go to PACK. Otherwise → enter repair loop.
+- **Tie-break**: if two iterations have equal score, the **earlier** one wins (prefer less churn).
+
 ## Detailed Design
 
 ### 1. Iteration Config
@@ -62,10 +68,11 @@ Each iteration runs the FULL safety chain, not just engineer + reviews:
 2. **Regenerate combined.patch** (git diff)
 3. **Scope gate** (changed files within inScope)
 4. **Policy compliance** (bash_deny_patterns, tool restrictions)
-5. **Mechanic** (lint, typecheck, tests vs baseline)
-6. **Holdout validation** (if medium/high risk)
-7. **AI reviews** (risk-proportional: low=Claude, medium/high=full panel)
-8. **Synthesizer** (deterministic verdict)
+5. **Repo-contract invariants** (Step 3.0.5 — if regression, AUTO_BLOCK immediately)
+6. **Mechanic** (lint, typecheck, tests vs baseline)
+7. **Holdout validation** (if medium/high risk)
+8. **AI reviews** (risk-proportional: low=Claude, medium/high=full panel)
+9. **Synthesizer** (deterministic verdict)
 
 ### 3. Risk-Proportional Review (preserved)
 
@@ -127,6 +134,26 @@ Order matters — deterministic signals first:
 - Re-run visible AC verifies after fix
 ```
 
+### 6.1. Repair Brief — Engineer Invocation
+
+Repair-mode engineer reads the SAME files as normal mode plus the brief:
+- `.signum/contract-engineer.json` (original contract, holdouts redacted)
+- `.signum/baseline.json` (pre-change check state)
+- `.signum/repair_brief.json` (new — the repair brief)
+
+Orchestrator prompt to engineer agent:
+
+```
+Read .signum/contract-engineer.json for scope and acceptance criteria.
+Read .signum/baseline.json for pre-existing check state.
+Read .signum/repair_brief.json for the specific issues to fix.
+Fix ONLY the issues listed in the repair brief. Do not refactor, do not add features.
+After fixing, run the visible AC verifies to confirm you didn't break them.
+Write .signum/combined.patch and .signum/execute_log.json.
+```
+
+The brief is a delta — engineer still works within the original contract boundaries.
+
 ### 7. Holdout Sanitization
 
 Engineer NEVER sees holdout details. Sanitized message format:
@@ -162,7 +189,14 @@ Categories derived from holdout description via simple keyword extraction:
   audit_iteration_log.json   # summary of all iterations
 ```
 
-Each iteration's artifacts stored separately. No overwrites. Working copies in `.signum/` still updated for compatibility.
+Each iteration's artifacts stored separately. No overwrites. Working copies in `.signum/` always overwritten to match the active candidate; `iterations/*` remain immutable snapshots.
+
+**Iteration 01** = initial EXECUTE candidate (pass 1 artifacts, before any fix).
+
+**Cleanup rules:**
+- On pipeline restart (user chooses "restart from Phase 1"), delete `iterations/`, `audit_iteration_log.json`, `flaky_tests.json` alongside existing cleanup list
+- On archive mode, purge `iterations/` (only contract + proofpack + audit_summary kept)
+- On resume mid-audit: discard partial iteration artifacts, continue from last complete iteration number
 
 ### 9. Best-of-N with Rollback
 
@@ -296,27 +330,33 @@ SIGNUM_CI_RELAXED — if "true", HUMAN_REVIEW maps to exit 0 instead of 78
 | `docs/how-it-works.md` | Update AUDIT section for iterative flow |
 | `docs/reference.md` | Document new env vars, iteration behavior |
 | `CHANGELOG.md` | v4.2.0 entry |
+| `commands/signum.md` (restart/archive) | Add `iterations/`, `audit_iteration_log.json`, `flaky_tests.json` to cleanup lists |
+| `tests/test-signum-ci.sh` | Add tests for SIGNUM_CI_RELAXED strict vs relaxed mapping |
 
 ### 15. Flaky Test Handling in Mechanic
 
 Add retry logic to mechanic's test runner (Step 3.1):
 
+**Scope: v4.2 flaky test retry is pytest-only.** Other runners (jest, cargo, go test) only record suite-level exit codes today — for those, suite-level instability (exit code flip-flops between iterations without code change) is capped at `HUMAN_REVIEW`.
+
+**pytest retry:**
 ```bash
 # On NEW test failure (not in baseline):
-# Retry failing tests up to 2 more times
 for failing_test in $NEW_FAILURES; do
-  RETRY_PASS=0
+  PASS_COUNT=0
   for attempt in 1 2; do
-    if run_single_test "$failing_test"; then
-      RETRY_PASS=$((RETRY_PASS + 1))
-    fi
+    pytest "$failing_test" --tb=no -q > /dev/null 2>&1 && PASS_COUNT=$((PASS_COUNT + 1))
   done
-  if [ $RETRY_PASS -ge 1 ]; then
-    # Mixed results → flaky, exclude from regression
+  if [ $PASS_COUNT -ge 1 ]; then
+    # Mixed results (1 or 2 of 3 passed) → flaky
     mark_flaky "$failing_test"
   fi
 done
 ```
+
+**Non-pytest runners:** no per-test retry. If suite exit code differs from baseline without code changes between iterations, treat as suite-level flaky.
+
+**Non-rerunnable failures** (build errors, panics before test discovery, infra timeouts): always counted as real regressions, no retry.
 
 Flaky state persisted in `.signum/flaky_tests.json`:
 ```json
@@ -345,12 +385,17 @@ Flaky state persisted in `.signum/flaky_tests.json`:
 **Restore immutable baseline + re-apply best iteration's `combined.patch`.**
 
 Procedure:
-1. `git checkout $BASE_COMMIT -- .` (BASE_COMMIT from `execution_context.json`, captured in Step 2.0)
-2. `git apply .signum/iterations/<best>/combined.patch`
-3. Regenerate working `.signum/combined.patch`
-4. If apply fails → stop, return `HUMAN_REVIEW` with `terminalReason: "rollback_patch_apply_failed"`
+1. `git clean -fd` (remove untracked files from failed candidate — they survive `git checkout`)
+2. `git checkout $BASE_COMMIT -- .` (BASE_COMMIT from `execution_context.json`, captured in Step 2.0)
+3. `git apply .signum/iterations/<best>/combined.patch`
+4. Copy `.signum/iterations/<best>/{mechanic_report,holdout_report,audit_summary}.json` → `.signum/` working copies
+5. Copy `.signum/iterations/<best>/reviews/*` → `.signum/reviews/`
+6. Regenerate working `.signum/combined.patch`
+7. If apply fails → stop, return `HUMAN_REVIEW` with `terminalReason: "rollback_patch_apply_failed"`
 
 Each iteration's `combined.patch` already persisted in `iterations/N/`. No git stash, no worktrees, no temporary commits.
+
+**Note:** `git clean -fd` excludes `.signum/` (already in `.gitignore`). Only project files are cleaned.
 
 Rejected alternatives:
 - git checkout to commits — too dependent on git state, clobbers working tree
