@@ -1845,11 +1845,15 @@ fi
 SKIP_ITERATION=false
 if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; then
   echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
-  # Scoped rollback: only clean/restore files in inScope + allowNewFilesUnder (not entire worktree)
-  IN_SCOPE_FILES=$(jq -r '.inScope[]' .signum/contract.json 2>/dev/null)
-  ALLOW_NEW=$(jq -r '.allowNewFilesUnder[]? // empty' .signum/contract.json 2>/dev/null)
-  for f in $IN_SCOPE_FILES; do git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- "$f" 2>/dev/null || true; done
-  for d in $ALLOW_NEW; do git clean -fd "$d" 2>/dev/null || true; done
+  # Scoped rollback: only revert files that Signum changed (from combined.patch), preserve everything else
+  # 1. Identify files changed by current iteration's patch
+  CHANGED_FILES=$(git diff --name-only 2>/dev/null || true)
+  # 2. Restore tracked inScope files to base_commit state
+  BASE=$(jq -r '.base_commit' .signum/execution_context.json)
+  for f in $CHANGED_FILES; do git checkout "$BASE" -- "$f" 2>/dev/null || true; done
+  # 3. Remove only NEW files created by engineer (untracked files that are in allowNewFilesUnder AND in the patch)
+  NEW_FILES=$(git diff --name-only --diff-filter=A "$BASE" 2>/dev/null || true)
+  for f in $NEW_FILES; do rm -f "$f" 2>/dev/null || true; done
   if git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
     # Sync .signum/ working copies from best iteration
     BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
@@ -2059,11 +2063,12 @@ ITERATIONS_USED=$CURRENT_ITERATION
 RESTORE_FAILED=false
 if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
   echo "Restoring best candidate from iteration $BEST_ITERATION"
-  # Scoped restore: only reset files in inScope + allowNewFilesUnder (preserve unrelated worktree state)
-  IN_SCOPE_FILES=$(jq -r '.inScope[]' .signum/contract.json 2>/dev/null)
-  ALLOW_NEW=$(jq -r '.allowNewFilesUnder[]? // empty' .signum/contract.json 2>/dev/null)
-  for f in $IN_SCOPE_FILES; do git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- "$f" 2>/dev/null || true; done
-  for d in $ALLOW_NEW; do git clean -fd "$d" 2>/dev/null || true; done
+  # Scoped restore: only revert files Signum changed, preserve everything else
+  CHANGED_FILES=$(git diff --name-only 2>/dev/null || true)
+  BASE=$(jq -r '.base_commit' .signum/execution_context.json)
+  for f in $CHANGED_FILES; do git checkout "$BASE" -- "$f" 2>/dev/null || true; done
+  NEW_FILES=$(git diff --name-only --diff-filter=A "$BASE" 2>/dev/null || true)
+  for f in $NEW_FILES; do rm -f "$f" 2>/dev/null || true; done
   # Always sync audit artifacts from best iteration so PACK reads consistent data
   BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
   cp "${BEST_DIR}/combined.patch" .signum/
