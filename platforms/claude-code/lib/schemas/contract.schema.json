@@ -9,7 +9,7 @@
     "required": ["contractId", "status", "timestamps"]
   },
   "properties": {
-    "schemaVersion": { "type": "string", "enum": ["3.0", "3.1", "3.2", "3.3", "3.4", "3.5"] },
+    "schemaVersion": { "type": "string", "enum": ["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6"] },
     "glossaryVersion": { "type": "string", "description": "Version string from project.glossary.json at contract creation time" },
     "contractId": { "type": "string", "pattern": "^sig-.+" },
     "status": {
@@ -220,6 +220,26 @@
         "projectIntentSha256": {
           "type": "string",
           "description": "SHA-256 of project.intent.md contents at contract creation time"
+        },
+        "contextSnapshotHash": {
+          "type": "string",
+          "description": "SHA-256 hex digest over concatenated byte contents of all files listed in staleIfChanged, in array order, computed at contract creation time"
+        },
+        "staleIfChanged": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Upstream artifact paths whose modification triggers staleness; hash is recomputed over these files during upstream_staleness_check"
+        },
+        "stalenessStatus": {
+          "type": "string",
+          "enum": ["fresh", "warning", "stale"],
+          "description": "Current staleness state: fresh=hash matches, warning=soft mismatch, stale=hash differs and policy=block"
+        },
+        "stalenessPolicy": {
+          "type": "string",
+          "enum": ["block", "warn"],
+          "default": "warn",
+          "description": "Action when upstream hash differs: block=halt pipeline, warn=emit warning and continue"
         }
       },
       "additionalProperties": true

@@ -924,6 +924,102 @@ if [ -f .signum/spec_quality.json ]; then
 fi
 ```
 
+#### Upstream staleness check (upstream_staleness_check — blocking when stalenessPolicy is "block")
+
+Run the upstream_staleness_check: recompute SHA-256 over all files listed in `contextInheritance.staleIfChanged`, compare to `contextInheritance.contextSnapshotHash`, and emit BLOCK or WARN when the hash differs. This check is **skipped** when `staleIfChanged` is absent or empty.
+
+```bash
+STALE_FILES=$(jq -r '(.contextInheritance.staleIfChanged // []) | .[]' .signum/contract.json 2>/dev/null || true)
+STALE_COUNT=$(jq '(.contextInheritance.staleIfChanged // []) | length' .signum/contract.json 2>/dev/null || echo 0)
+
+if [ "$STALE_COUNT" -eq 0 ] || [ -z "$STALE_FILES" ]; then
+  echo "upstream_staleness_check: skipped (staleIfChanged is absent or empty)"
+else
+  STORED_HASH=$(jq -r '.contextInheritance.contextSnapshotHash // ""' .signum/contract.json)
+  STALENESS_POLICY=$(jq -r '.contextInheritance.stalenessPolicy // "warn"' .signum/contract.json)
+
+  if [ -z "$STORED_HASH" ]; then
+    echo "upstream_staleness_check: skipped (contextSnapshotHash not set)"
+  else
+    # Recompute SHA-256 over concatenated contents of all staleIfChanged files (in array order)
+    TMPFILE=$(mktemp "${TMPDIR:-/tmp}/signum-staleness.XXXXXX")
+    MISSING_FILES=""
+    TRAVERSAL_REJECTED=""
+    while IFS= read -r sf; do
+      [ -z "$sf" ] && continue
+      # Reject path traversal
+      case "$sf" in
+        *../*|../*|*/..) TRAVERSAL_REJECTED="$TRAVERSAL_REJECTED $sf"; continue ;;
+      esac
+      RESOLVED_PATH="${PROJECT_ROOT:-$PWD}/$sf"
+      if [ -f "$RESOLVED_PATH" ]; then
+        cat "$RESOLVED_PATH" >> "$TMPFILE"
+      else
+        MISSING_FILES="$MISSING_FILES $sf"
+      fi
+    done <<< "$STALE_FILES"
+
+    if [ -n "$TRAVERSAL_REJECTED" ]; then
+      echo "upstream_staleness_check: BLOCK — path traversal rejected:$TRAVERSAL_REJECTED"
+      rm -f "$TMPFILE"
+      exit 1
+    fi
+
+    if [ -n "$MISSING_FILES" ]; then
+      echo "upstream_staleness_check: missing upstream files:$MISSING_FILES"
+      # Update stalenessStatus based on policy
+      if [ "$STALENESS_POLICY" = "block" ]; then
+        jq '.contextInheritance.stalenessStatus = "stale"' .signum/contract.json > .signum/contract.json.tmp \
+          && mv .signum/contract.json.tmp .signum/contract.json
+        echo "BLOCK: upstream files missing and stalenessPolicy=block."
+        rm -f "$TMPFILE"
+        exit 1
+      else
+        jq '.contextInheritance.stalenessStatus = "warning"' .signum/contract.json > .signum/contract.json.tmp \
+          && mv .signum/contract.json.tmp .signum/contract.json
+        echo "WARN: upstream files missing (stalenessPolicy=warn)."
+      fi
+      rm -f "$TMPFILE"
+    else
+      # Compute SHA-256 of concatenated content
+      if command -v sha256sum > /dev/null 2>&1; then
+        CURRENT_HASH=$(sha256sum "$TMPFILE" | awk '{print $1}')
+      else
+        CURRENT_HASH=$(shasum -a 256 "$TMPFILE" | awk '{print $1}')
+      fi
+      rm -f "$TMPFILE"
+
+      if [ "$CURRENT_HASH" = "$STORED_HASH" ]; then
+        echo "upstream_staleness_check: fresh (hash matches: ${STORED_HASH:0:16}...)"
+        # Update stalenessStatus to fresh in contract
+        jq '.contextInheritance.stalenessStatus = "fresh"' .signum/contract.json > .signum/contract.json.tmp \
+          && mv .signum/contract.json.tmp .signum/contract.json
+      else
+        echo "upstream_staleness_check: hash mismatch"
+        echo "  stored:  $STORED_HASH"
+        echo "  current: $CURRENT_HASH"
+        echo "  staleIfChanged files: $(echo "$STALE_FILES" | tr '\n' ' ')"
+
+        if [ "$STALENESS_POLICY" = "block" ]; then
+          # Update stalenessStatus to stale
+          jq '.contextInheritance.stalenessStatus = "stale"' .signum/contract.json > .signum/contract.json.tmp \
+            && mv .signum/contract.json.tmp .signum/contract.json
+          echo "BLOCK: upstream artifacts have changed since contract was created (stalenessPolicy=block)."
+          echo "Re-run the Contractor agent to refresh the contract against current upstream artifacts."
+          exit 1
+        else
+          # Update stalenessStatus to warning
+          jq '.contextInheritance.stalenessStatus = "warning"' .signum/contract.json > .signum/contract.json.tmp \
+            && mv .signum/contract.json.tmp .signum/contract.json
+          echo "WARN: upstream artifacts have changed since contract was created (stalenessPolicy=warn)."
+          echo "Consider re-running the Contractor agent to refresh the contract."
+        fi
+      fi
+    fi
+  fi
+fi
+```
+
 ### Step 1.3.6: Intent alignment check (informational, medium/high risk only)
 
 **Skip if `riskLevel` is `low`.** Low-risk tasks don't benefit from LLM alignment checks.

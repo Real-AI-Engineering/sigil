@@ -113,7 +113,7 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"3.0"`–`"3.5"` | Schema version |
+| `schemaVersion` | `"3.0"`–`"3.6"` | Schema version |
 | `glossaryVersion` | string | Version from `project.glossary.json` at contract creation time (optional, omitted when file absent) |
 | `goal` | string | What to build (min 10 chars) |
 | `inScope` | string[] | Items in scope (min 1) |
@@ -127,6 +127,10 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `contextInheritance` | object | Project context references (optional) |
 | `contextInheritance.projectRef` | string\|null | Path to project.intent.md, "not_found", null (waiver), or absent (legacy) |
 | `contextInheritance.projectIntentSha256` | string | SHA-256 of project.intent.md at contract creation |
+| `contextInheritance.contextSnapshotHash` | string | SHA-256 hex digest over concatenated byte contents of all `staleIfChanged` files in array order, computed at contract creation time |
+| `contextInheritance.staleIfChanged` | string[] | Upstream artifact paths tracked for staleness; at minimum includes `project.intent.md` when loaded |
+| `contextInheritance.stalenessStatus` | `"fresh"\|"warning"\|"stale"` | Current staleness state: fresh=hash matches, warning=soft mismatch, stale=hash differs and policy=block |
+| `contextInheritance.stalenessPolicy` | `"block"\|"warn"` | Action when upstream hash differs: block=halt pipeline (BLOCK), warn=continue with warning (default: `"warn"`) |
 | `dependsOnContractIds` | string[] | ContractIds that must complete before this contract executes (user-declared, optional) |
 | `supersedesContractIds` | string[] | ContractIds this contract replaces (user-declared, optional) |
 | `supersededByContractId` | string | ContractId of the contract that replaces this one (optional) |
@@ -152,6 +156,26 @@ Optional file at `PROJECT_ROOT/project.glossary.json`. When present, contractor 
 | `version` | string | Glossary version string (mirrors `glossaryVersion` in contract) |
 | `canonicalTerms` | string[] | Approved terminology for this project |
 | `aliases` | object | Map of forbidden synonyms to their canonical replacements |
+
+#### upstream_staleness_check
+
+Runs during Phase 1 spec quality gate (after the `adr_relevance_check`). Skipped when `contextInheritance.staleIfChanged` is absent or empty.
+
+When `staleIfChanged` is a non-empty array, the check always executes:
+
+1. Concatenates the byte contents of all files listed in `staleIfChanged` (in array order)
+2. Computes SHA-256 of the concatenated bytes
+3. Compares the result to `contextInheritance.contextSnapshotHash`
+
+Outcome depends on `contextInheritance.stalenessPolicy` (default `"warn"`):
+
+| Hash result | Policy | Outcome |
+|-------------|--------|---------|
+| Matches | any | `fresh` — pipeline continues |
+| Differs | `"warn"` | `warning` — WARN emitted, pipeline continues |
+| Differs | `"block"` | `stale` — BLOCK emitted, pipeline stops; re-run Contractor to refresh |
+
+`contextInheritance.stalenessStatus` is updated in-place in `contract.json` after the check.
 
 #### glossary_check
 

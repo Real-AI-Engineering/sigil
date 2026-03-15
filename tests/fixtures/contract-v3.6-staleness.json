@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "3.6",
+  "contractId": "sig-20260315-a1b2",
+  "status": "active",
+  "timestamps": {
+    "createdAt": "2026-03-15T10:00:00Z",
+    "activatedAt": "2026-03-15T10:05:00Z"
+  },
+  "goal": "Test fixture for contract schema v3.6 upstream staleness detection fields",
+  "inScope": ["project.intent.md"],
+  "acceptanceCriteria": [
+    {
+      "id": "AC01",
+      "description": "contextSnapshotHash must be present and non-null",
+      "visibility": "visible",
+      "verify": {
+        "type": "manual",
+        "value": "Check contextInheritance.contextSnapshotHash is a non-empty SHA-256 hex string"
+      }
+    }
+  ],
+  "riskLevel": "low",
+  "contextInheritance": {
+    "projectRef": "project.intent.md",
+    "projectIntentSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "contextSnapshotHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "staleIfChanged": ["project.intent.md"],
+    "stalenessStatus": "fresh",
+    "stalenessPolicy": "warn"
+  }
+}

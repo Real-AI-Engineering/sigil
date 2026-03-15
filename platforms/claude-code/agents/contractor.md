@@ -43,6 +43,11 @@ You receive:
      - Compute SHA-256 of file contents, set `contextInheritance.projectIntentSha256`
      - Use project non-goals to populate `outOfScope` if user didn't specify
      - Use glossary terms in acceptance criteria language
+   - **Upstream staleness tracking** (v3.6, always when contextInheritance is populated):
+     - Populate `contextInheritance.staleIfChanged` with the paths of all upstream artifacts loaded via contextInheritance. At minimum, include `"project.intent.md"` when `projectRef` is set to a path (not `"not_found"` or null). Also include `"project.glossary.json"` if it was loaded.
+     - Compute `contextInheritance.contextSnapshotHash`: concatenate the byte contents of all files listed in `staleIfChanged` in array order, then compute SHA-256 of the concatenated bytes. Write the hex digest to `contextInheritance.contextSnapshotHash`.
+     - Set `contextInheritance.stalenessPolicy` to `"warn"` (default) unless the user has specified a stricter policy.
+     - Set `contextInheritance.stalenessStatus` to `"fresh"` at contract creation time (hash was just computed).
    - If project.intent.md was NOT found AND riskLevel >= medium:
      - Add to openQuestions: `"[INTENT_WAIVER] Project intent not defined. Create project.intent.md at repo root, or reply 'proceed without project context' to continue."`
      - Set `requiredInputsProvided` = false
@@ -85,7 +90,7 @@ You receive:
      GOOD: `{"http": {"method": "GET", "url": "localhost:8000/api/endpoint"}, "capture": "r"}` then `{"expect": {"json_path": "$.status", "source": "r", "equals": 200}}`
      GOOD: `{"exec": {"argv": ["test", "-f", "src/module.py"]}}`
    - riskLevel, riskSignals
-   - contextInheritance (projectRef, projectIntentSha256 — set in step 3.5)
+   - contextInheritance (projectRef, projectIntentSha256, contextSnapshotHash, staleIfChanged, stalenessStatus, stalenessPolicy — set in step 3.5)
 5. **Detect lineage** (if `.signum/contracts/index.json` exists):
    - Read completed/archived contracts from index.json
    - For each, check if their inScope files overlap with the new contract's inScope

@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.5.0] - 2026-03-15
+
+### Added
+- Contract schema v3.6: upstream staleness detection via four new optional fields inside `contextInheritance`:
+  - `contextSnapshotHash` (string) — SHA-256 hex digest over concatenated byte contents of `staleIfChanged` files in array order, computed at contract creation time
+  - `staleIfChanged` (string[]) — upstream artifact paths whose modification triggers staleness; at minimum includes `project.intent.md` when loaded
+  - `stalenessStatus` (enum: `fresh|warning|stale`) — current staleness state updated by the pipeline
+  - `stalenessPolicy` (enum: `block|warn`, default `warn`) — action when upstream hash differs
+- `upstream_staleness_check` step in Phase 1 CONTRACT (after `adr_relevance_check`): recomputes SHA-256 over `staleIfChanged` paths, compares to `contextSnapshotHash`, emits BLOCK when `stalenessPolicy=block` or WARN when `warn` if hash differs; skips when `staleIfChanged` is absent or empty
+- Contractor agent (Phase 4 upstream staleness tracking): automatically populates `staleIfChanged`, `contextSnapshotHash`, `stalenessStatus`, and `stalenessPolicy` at contract creation time when contextInheritance artifacts are loaded
+
+### Changed
+- Contract schema bumped to v3.6 (backward compatible with v3.0–v3.5)
+
 ## [4.4.0] - 2026-03-15
 
 ### Added
