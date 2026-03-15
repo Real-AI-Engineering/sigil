@@ -1796,6 +1796,7 @@ mkdir -p .signum/iterations/01/reviews
 cp .signum/combined.patch .signum/iterations/01/
 cp .signum/mechanic_report.json .signum/iterations/01/
 cp .signum/holdout_report.json .signum/iterations/01/ 2>/dev/null || true
+cp .signum/execute_log.json .signum/iterations/01/ 2>/dev/null || true
 cp .signum/reviews/*.json .signum/iterations/01/reviews/ 2>/dev/null || true
 cp .signum/audit_summary.json .signum/iterations/01/
 
@@ -1912,6 +1913,8 @@ if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; t
     cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
     cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
     cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+    cp "${BEST_DIR}/execute_log.json" .signum/ 2>/dev/null || true
+    rm -f .signum/reviews/*.json
     cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
     cp "${BEST_DIR}/audit_summary.json" .signum/ 2>/dev/null || true
   else
@@ -1986,6 +1989,7 @@ mkdir -p "$ITER_DIR/reviews"
 cp .signum/combined.patch "$ITER_DIR/"
 cp .signum/mechanic_report.json "$ITER_DIR/"
 cp .signum/holdout_report.json "$ITER_DIR/" 2>/dev/null || true
+cp .signum/execute_log.json "$ITER_DIR/" 2>/dev/null || true
 cp .signum/reviews/*.json "$ITER_DIR/reviews/" 2>/dev/null || true
 cp .signum/audit_summary.json "$ITER_DIR/"
 cp .signum/repair_brief.json "$ITER_DIR/"
@@ -2048,6 +2052,8 @@ if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
   cp "${BEST_DIR}/combined.patch" .signum/
   cp "${BEST_DIR}/mechanic_report.json" .signum/
   cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+  cp "${BEST_DIR}/execute_log.json" .signum/ 2>/dev/null || true
+  rm -f .signum/reviews/*.json
   cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
   cp "${BEST_DIR}/audit_summary.json" .signum/
 
