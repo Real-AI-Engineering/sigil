@@ -5,7 +5,7 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.6.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.7.0-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
 
 ```bash
@@ -23,7 +23,7 @@ AI can generate a function in seconds; telling you whether it is correct takes l
 |-------|-------------|
 | **CONTRACT** | Spec graded A–F. Codex + Gemini validate for gaps. |
 | **EXECUTE** | Engineer builds against a redacted contract. |
-| **AUDIT** | Deterministic checks + 3-model parallel review. |
+| **AUDIT** | Deterministic checks + 3-model parallel review + iterative fix loop. |
 | **PACK** | Self-contained `proofpack.json` for CI gating. |
 
 ## Install
@@ -99,6 +99,10 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 
 **Multi-model audit panel** — Claude, Codex, and Gemini review the diff independently in parallel. The Mechanic runs first — deterministic checks: lint, typecheck, new test failures (by name, not exit code). Then models weigh in. Critical findings from any model block.
 
+**Iterative review-fix loop** — When reviewers find MAJOR or CRITICAL issues, the AUDIT phase doesn't stop — it iterates. A fresh Engineer agent receives a repair brief with specific findings, fixes them, and the full review cycle re-runs from scratch. Best-of-N selection keeps the highest-scoring candidate across iterations. Early stop halts after 2 consecutive non-improving rounds. Up to 20 iterations (configurable via `SIGNUM_AUDIT_MAX_ITERATIONS`). Holdout details are never revealed to the engineer — only failure categories.
+
+**Diff progression** — On review pass 2+, reviewers receive both the full feature diff and an iteration delta showing only what changed in the fix. This focuses review on the actual repair, reduces noise from re-discovering accepted code, and improves convergence speed.
+
 ## Architecture
 
 ```
@@ -139,6 +143,10 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 │  → Claude + Codex + Gemini (parallel, independent)      │
 │  → holdout verification                                 │
 │  → Synthesizer (verdict + confidence score)             │
+│  → if MAJOR/CRITICAL: iterative fix loop ───────┐      │
+│      engineer fixes → full re-review → repeat   │      │
+│      best-of-N selection, up to 20 iterations   │      │
+│      diff progression: full patch + delta ◄─────┘      │
 └───────────────────────────┬─────────────────────────────┘
                             │
                             ▼
