@@ -457,7 +457,7 @@ Use the Bash tool to score the contract on 7 dimensions. A score below 69 (grade
 ```bash
 GOAL=$(jq -r '.goal' .signum/contract.json)
 AC_COUNT=$(jq '.acceptanceCriteria | length' .signum/contract.json)
-AC_WITH_VERIFY=$(jq '[.acceptanceCriteria[] | select(.verify.type and .verify.value)] | length' .signum/contract.json)
+AC_WITH_VERIFY=$(jq '[.acceptanceCriteria[] | select((.verify.type and .verify.value) or .verify.steps)] | length' .signum/contract.json)
 INSCOPE_COUNT=$(jq '.inScope | length' .signum/contract.json)
 HAS_OUTOFSCOPE=$(jq 'if (.outOfScope | length) > 0 then 1 else 0 end' .signum/contract.json)
 HAS_ASSUMPTIONS=$(jq 'if (.assumptions | length) > 0 then 1 else 0 end' .signum/contract.json)
