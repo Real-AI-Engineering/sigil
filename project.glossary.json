@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "canonicalTerms": [
+    "contract",
+    "acceptance criterion",
+    "proofpack",
+    "engineer",
+    "contractor",
+    "synthesizer",
+    "holdout",
+    "spec quality"
+  ],
+  "aliases": {
+    "design doc": "contract",
+    "specification": "contract",
+    "test case": "acceptance criterion",
+    "evidence bundle": "proofpack",
+    "proof bundle": "proofpack",
+    "developer": "engineer",
+    "implementer": "engineer",
+    "generator": "contractor",
+    "aggregator": "synthesizer",
+    "hidden test": "holdout",
+    "secret test": "holdout",
+    "quality score": "spec quality",
+    "spec score": "spec quality"
+  }
+}
