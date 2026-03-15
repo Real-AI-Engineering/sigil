@@ -1,5 +1,22 @@
 # Changelog
 
+## [4.4.0] - 2026-03-15
+
+### Added
+- Contract schema v3.5: four new optional fields for cross-contract graph queries:
+  - `dependsOnContractIds` (string[]) — ordered dependency edges (user-declared)
+  - `supersedesContractIds` (string[]) — obsolescence edges (user-declared)
+  - `supersededByContractId` (string) — reverse obsolescence pointer
+  - `interfacesTouched` (string[]) — named interfaces/APIs touched by the contract
+- Phase 3 cross-contract coherence checks (all WARN-only, non-blocking):
+  - `cross_contract_overlap_check`: detects inScope file overlap with active contracts in index.json; writes `overlap_warnings` to `spec_quality.json`
+  - `assumption_contradiction_check`: compares assumption text pairs across related contracts for direct contradiction keywords; writes `assumption_warnings` to `spec_quality.json`
+  - `adr_relevance_check`: scans `docs/adr/` and `docs/decisions/` for relevant ADRs against inScope paths; warns when `adrRefs` is absent/empty; graceful no-op when directories absent; writes `adr_warnings` to `spec_quality.json`
+- Contractor agent documents all four new v3.5 fields with usage guidance
+
+### Changed
+- Contract schema bumped to v3.5 (backward compatible with v3.0–v3.4)
+
 ## [4.3.0] - 2026-03-15
 
 ### Added

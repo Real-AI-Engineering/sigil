@@ -113,7 +113,7 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"3.0"`–`"3.4"` | Schema version |
+| `schemaVersion` | `"3.0"`–`"3.5"` | Schema version |
 | `glossaryVersion` | string | Version from `project.glossary.json` at contract creation time (optional, omitted when file absent) |
 | `goal` | string | What to build (min 10 chars) |
 | `inScope` | string[] | Items in scope (min 1) |
@@ -127,6 +127,10 @@ All artifacts are stored in `.signum/` (auto-added to `.gitignore`):
 | `contextInheritance` | object | Project context references (optional) |
 | `contextInheritance.projectRef` | string\|null | Path to project.intent.md, "not_found", null (waiver), or absent (legacy) |
 | `contextInheritance.projectIntentSha256` | string | SHA-256 of project.intent.md at contract creation |
+| `dependsOnContractIds` | string[] | ContractIds that must complete before this contract executes (user-declared, optional) |
+| `supersedesContractIds` | string[] | ContractIds this contract replaces (user-declared, optional) |
+| `supersededByContractId` | string | ContractId of the contract that replaces this one (optional) |
+| `interfacesTouched` | string[] | Named interfaces, APIs, or module boundaries this contract modifies (optional) |
 
 ### project.glossary.json schema
 
@@ -156,6 +160,18 @@ Runs during Phase 1 spec quality gate (Step 1.3.5). Scans the contract's `goal`,
 #### terminology_consistency_check
 
 Runs during Phase 1 spec quality gate (Step 1.3.5) after `glossary_check`. Reads `.signum/contracts/index.json`, extracts goal text from active contracts, and scans for synonym proliferation (same concept appearing under two different terms across contracts). Emits `WARN` lines on synonym proliferation. When `.signum/contracts/index.json` is absent or contains no contracts with active status, the check outputs a skip message and does not block or fail. This check is **non-blocking**.
+
+#### cross_contract_overlap_check
+
+Runs during Phase 1 spec quality gate. Reads `.signum/contracts/index.json`, compares the new contract's `inScope` against active contracts' `inScope` arrays. Emits `WARN` when files overlap with another active contract, listing the overlapping files and the conflicting contract ID. Skips gracefully when index is absent or has no active contracts. **Non-blocking.**
+
+#### assumption_contradiction_check
+
+Runs during Phase 1 spec quality gate after `cross_contract_overlap_check`. Reads assumptions from the new contract and compares against assumptions of active contracts in `index.json`. Emits `WARN` when assumption text contains contradictory terms (e.g., one contract assumes "X is true" while another assumes "X is false"). **Non-blocking.**
+
+#### adr_relevance_check
+
+Runs during Phase 1 spec quality gate. Scans for `docs/adr/` or `docs/decisions/` directories. If ADR files exist and the contract's `inScope` touches paths that match ADR file globs, emits `WARN` suggesting the contract reference relevant ADRs. Skips when no ADR directories exist. **Non-blocking.**
 
 ### proofpack.json fields (v4.1)
 

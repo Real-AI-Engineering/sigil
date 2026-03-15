@@ -731,6 +731,199 @@ else
 fi
 ```
 
+#### Cross-contract overlap check (cross_contract_overlap_check — informational, non-blocking)
+
+Run the cross_contract_overlap_check: read `.signum/contracts/index.json`, compare inScope arrays of active contracts against the new contract's inScope, and emit overlap warnings. This check is **non-blocking** — it never fails the pipeline or reduces the numeric spec quality score. Warnings are written only to `overlap_warnings` in `spec_quality.json`.
+
+```bash
+INDEX_FILE=".signum/contracts/index.json"
+if [ ! -f "$INDEX_FILE" ]; then
+  echo "cross_contract_overlap_check: skipped (no contracts index found)"
+else
+  NEW_CONTRACT_ID=$(jq -r '.contractId // ""' .signum/contract.json)
+  ACTIVE_CONTRACTS=$(jq -c '
+    (.contracts // []) |
+    map(select(.status == "active"))
+  ' "$INDEX_FILE" 2>/dev/null || echo "[]")
+  ACTIVE_COUNT=$(echo "$ACTIVE_CONTRACTS" | jq 'length')
+
+  if [ "$ACTIVE_COUNT" -eq 0 ]; then
+    echo "cross_contract_overlap_check: no active contracts in index — skipped"
+    OVERLAP_WARNS="[]"
+  else
+    NEW_INSCOPE=$(jq -c '.inScope // []' .signum/contract.json)
+    OVERLAP_WARNS=$(echo "$ACTIVE_CONTRACTS" | jq -c --argjson new_scope "$NEW_INSCOPE" --arg self_id "$NEW_CONTRACT_ID" '
+      [.[] |
+        select(.contractId != $self_id) |
+        . as $other |
+        ($other.inScope // []) as $other_scope |
+        ($new_scope | map(select(. as $f | $other_scope | index($f) != null))) as $overlaps |
+        select($overlaps | length > 0) |
+        {
+          contractId: $other.contractId,
+          overlappingFiles: $overlaps,
+          message: ("WARN: inScope overlap with active contract " + $other.contractId + " on files: " + ($overlaps | join(", ")))
+        }
+      ]
+    ' 2>/dev/null || echo "[]")
+
+    OVERLAP_COUNT=$(echo "$OVERLAP_WARNS" | jq 'length')
+    if [ "$OVERLAP_COUNT" -gt 0 ]; then
+      echo "cross_contract_overlap_check: $OVERLAP_COUNT overlapping active contract(s) found (WARN only)"
+      echo "$OVERLAP_WARNS" | jq -r '.[] | "  WARN: " + .message'
+    else
+      echo "cross_contract_overlap_check: no inScope overlaps found"
+    fi
+  fi
+
+  # Write overlap_warnings into spec_quality.json (non-blocking, does not affect score)
+  if [ -f .signum/spec_quality.json ]; then
+    jq --argjson warns "${OVERLAP_WARNS:-[]}" \
+      '. + {overlap_warnings: $warns}' \
+      .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+      && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+  fi
+fi
+```
+
+#### Assumption contradiction check (assumption_contradiction_check — informational, non-blocking)
+
+Run the assumption_contradiction_check: read assumptions from each related contract in index.json (parentContractId, relatedContractIds), compare assumption text pairs for direct contradiction keywords, and emit contradiction warnings. This check is **non-blocking** — it does not block the pipeline.
+
+```bash
+INDEX_FILE=".signum/contracts/index.json"
+PARENT_ID=$(jq -r '.parentContractId // ""' .signum/contract.json)
+RELATED_IDS=$(jq -r '(.relatedContractIds // []) | .[]' .signum/contract.json 2>/dev/null || true)
+NEW_ASSUMPTIONS=$(jq -r '(.assumptions // []) | .[].text' .signum/contract.json 2>/dev/null || true)
+
+if [ ! -f "$INDEX_FILE" ] || ( [ -z "$PARENT_ID" ] && [ -z "$RELATED_IDS" ] ); then
+  echo "assumption_contradiction_check: no related contracts — skipped"
+  ASSUMPTION_WARNS="[]"
+else
+  ALL_RELATED_IDS="$PARENT_ID $RELATED_IDS"
+  CONTRADICTION_WARNS="[]"
+  for REL_ID in $ALL_RELATED_IDS; do
+    [ -z "$REL_ID" ] && continue
+    REL_ASSUMPTIONS=$(jq -r --arg id "$REL_ID" \
+      '(.contracts // []) | map(select(.contractId == $id)) | .[0].assumptions // [] | .[].text' \
+      "$INDEX_FILE" 2>/dev/null || true)
+    [ -z "$REL_ASSUMPTIONS" ] && continue
+
+    while IFS= read -r rel_text; do
+      [ -z "$rel_text" ] && continue
+      while IFS= read -r new_text; do
+        [ -z "$new_text" ] && continue
+        # Check for direct contradiction keywords: "must not X" vs "must X", "never X" vs "always X",
+        # "no X" in one and "X required" in another
+        CONTR=0
+        pos_word=$(echo "$new_text" | grep -oiE "\bmust [a-z]+\b" | grep -viE "must not" | head -1 || true)
+        if [ -n "$pos_word" ]; then
+          verb=$(echo "$pos_word" | awk '{print $2}')
+          echo "$rel_text" | grep -Fqi "must not $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "never $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "prevent $verb" && CONTR=1 || true
+        fi
+        neg_word=$(echo "$new_text" | grep -oiE "\bmust not [a-z]+\b|\bnever [a-z]+\b" | head -1 || true)
+        if [ -n "$neg_word" ]; then
+          verb=$(echo "$neg_word" | awk '{print $NF}')
+          echo "$rel_text" | grep -Fqi "must $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "always $verb" && CONTR=1 || \
+          echo "$rel_text" | grep -Fqi "require $verb" && CONTR=1 || true
+        fi
+        if [ "$CONTR" -eq 1 ]; then
+          WARN_ENTRY=$(jq -n --arg rel "$REL_ID" --arg a1 "$new_text" --arg a2 "$rel_text" \
+            '{"contractId": $rel, "assumption1": $a1, "assumption2": $a2,
+              "message": ("WARN: possible assumption contradiction between current contract and " + $rel)}')
+          CONTRADICTION_WARNS=$(echo "$CONTRADICTION_WARNS" | jq --argjson w "$WARN_ENTRY" '. + [$w]')
+        fi
+      done <<< "$NEW_ASSUMPTIONS"
+    done <<< "$REL_ASSUMPTIONS"
+  done
+  ASSUMPTION_WARNS="$CONTRADICTION_WARNS"
+
+  WARN_COUNT=$(echo "$ASSUMPTION_WARNS" | jq 'length')
+  if [ "$WARN_COUNT" -gt 0 ]; then
+    echo "assumption_contradiction_check: $WARN_COUNT contradiction(s) found (WARN only)"
+    echo "$ASSUMPTION_WARNS" | jq -r '.[] | "  " + .message'
+  else
+    echo "assumption_contradiction_check: no contradictions found"
+  fi
+fi
+
+# Write assumption_warnings into spec_quality.json (non-blocking, does not affect score)
+if [ -f .signum/spec_quality.json ]; then
+  jq --argjson warns "${ASSUMPTION_WARNS:-[]}" \
+    '. + {assumption_warnings: $warns}' \
+    .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+    && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+fi
+```
+
+#### ADR relevance check (adr_relevance_check — informational, non-blocking)
+
+Run the adr_relevance_check: scan `docs/adr/` and `docs/decisions/` for `*.md` files, match their filenames against inScope paths using glob-style prefix matching, and emit a WARN when relevant ADRs exist but the contract's `adrRefs` field is absent or empty. This check is **non-blocking** and degrades gracefully to a no-op when neither directory exists.
+
+```bash
+ADR_DIR_1=""; ADR_DIR_2=""
+if [ -d "${PROJECT_ROOT:-$PWD}/docs/adr" ]; then
+  ADR_DIR_1="${PROJECT_ROOT:-$PWD}/docs/adr"
+fi
+if [ -d "${PROJECT_ROOT:-$PWD}/docs/decisions" ]; then
+  ADR_DIR_2="${PROJECT_ROOT:-$PWD}/docs/decisions"
+fi
+
+if [ -z "$ADR_DIR_1" ] && [ -z "$ADR_DIR_2" ]; then
+  echo "adr_relevance_check: no docs/adr or docs/decisions directory found — skipped"
+  ADR_WARNS="[]"
+else
+  ADR_FIND_ARGS=()
+  [ -n "$ADR_DIR_1" ] && ADR_FIND_ARGS+=("$ADR_DIR_1")
+  [ -n "$ADR_DIR_2" ] && ADR_FIND_ARGS+=("$ADR_DIR_2")
+  ADR_FILES=$(find "${ADR_FIND_ARGS[@]}" -maxdepth 1 -name "*.md" 2>/dev/null | sort || true)
+  if [ -z "$ADR_FILES" ]; then
+    echo "adr_relevance_check: no ADR files found — skipped"
+    ADR_WARNS="[]"
+  else
+    INSCOPE_LIST=$(jq -r '.inScope // [] | .[]' .signum/contract.json 2>/dev/null || true)
+    ADR_REFS=$(jq -r '(.adrRefs // []) | length' .signum/contract.json 2>/dev/null || echo 0)
+    RELEVANT_ADRS=""
+    while IFS= read -r adr_file; do
+      [ -z "$adr_file" ] && continue
+      adr_base=$(basename "$adr_file" .md)
+      while IFS= read -r scope_path; do
+        [ -z "$scope_path" ] && continue
+        scope_base=$(basename "$scope_path" | sed 's/\.[^.]*$//')
+        # Fixed-string match: ADR name appears in scope path or vice versa
+        if echo "$scope_base" | grep -Fqi -- "$adr_base" 2>/dev/null || \
+           echo "$adr_base" | grep -Fqi -- "$scope_base" 2>/dev/null || \
+           echo "$scope_path" | grep -Fqi -- "$adr_base" 2>/dev/null; then
+          RELEVANT_ADRS="$RELEVANT_ADRS $adr_file"
+          break
+        fi
+      done <<< "$INSCOPE_LIST"
+    done <<< "$ADR_FILES"
+
+    if [ -n "$RELEVANT_ADRS" ] && [ "$ADR_REFS" -eq 0 ]; then
+      ADR_WARNS=$(jq -n --arg files "$(echo $RELEVANT_ADRS | tr ' ' '\n' | sort -u | tr '\n' ' ')" \
+        '[{"message": ("WARN: relevant ADR(s) found but adrRefs field is absent or empty: " + $files)}]')
+      echo "adr_relevance_check: relevant ADRs found but adrRefs is empty (WARN only)"
+      echo "$RELEVANT_ADRS" | tr ' ' '\n' | sort -u | while read -r f; do [ -n "$f" ] && echo "  WARN: consider referencing ADR: $f"; done
+    else
+      echo "adr_relevance_check: OK (relevant ADRs referenced or none found)"
+      ADR_WARNS="[]"
+    fi
+  fi
+fi
+
+# Write adr_warnings into spec_quality.json (non-blocking, does not affect score)
+if [ -f .signum/spec_quality.json ]; then
+  jq --argjson warns "${ADR_WARNS:-[]}" \
+    '. + {adr_warnings: $warns}' \
+    .signum/spec_quality.json > .signum/spec_quality_tmp.json \
+    && mv .signum/spec_quality_tmp.json .signum/spec_quality.json
+fi
+```
+
 ### Step 1.3.6: Intent alignment check (informational, medium/high risk only)
 
 **Skip if `riskLevel` is `low`.** Low-risk tasks don't benefit from LLM alignment checks.

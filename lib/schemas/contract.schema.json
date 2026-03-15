@@ -9,7 +9,7 @@
     "required": ["contractId", "status", "timestamps"]
   },
   "properties": {
-    "schemaVersion": { "type": "string", "enum": ["3.0", "3.1", "3.2", "3.3", "3.4"] },
+    "schemaVersion": { "type": "string", "enum": ["3.0", "3.1", "3.2", "3.3", "3.4", "3.5"] },
     "glossaryVersion": { "type": "string", "description": "Version string from project.glossary.json at contract creation time" },
     "contractId": { "type": "string", "pattern": "^sig-.+" },
     "status": {
@@ -223,6 +223,26 @@
         }
       },
       "additionalProperties": true
+    },
+    "dependsOnContractIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^sig-.+" },
+      "description": "ContractIds that must complete before this contract can be executed"
+    },
+    "supersedesContractIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^sig-.+" },
+      "description": "ContractIds that this contract replaces or supersedes"
+    },
+    "supersededByContractId": {
+      "type": "string",
+      "pattern": "^sig-.+",
+      "description": "ContractId of the contract that supersedes this one"
+    },
+    "interfacesTouched": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Named interfaces, APIs, or module boundaries touched by this contract"
     }
   }
 }

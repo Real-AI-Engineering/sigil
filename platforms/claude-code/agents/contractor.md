@@ -92,6 +92,12 @@ You receive:
    - If overlapping contract found: set `parentContractId` to the most recent overlapping contract's ID
    - If multiple related contracts found: populate `relatedContractIds` array
    - If no index.json or no overlapping contracts: omit these fields
+   - **Dependency and obsolescence fields** (v3.5, user-declared only — do NOT auto-detect):
+     - `dependsOnContractIds`: array of contractIds that must complete before this contract executes (set when user states ordering requirements)
+     - `supersedesContractIds`: array of contractIds this contract replaces (set when user says "this supersedes X")
+     - `supersededByContractId`: single contractId of the contract that replaces this one (set when archiving replaced contracts)
+     - `interfacesTouched`: array of named interfaces, APIs, or module boundaries this contract modifies (e.g. `"lib/schemas/contract.schema.json"`, `"REST /api/contracts"`) — helps overlap detection and graph queries
+   - Omit any of these four fields when not applicable
 6. **Validate** the contract:
    - All inScope paths must exist (or be new files to create)
    - All verify blocks must use valid DSL step types
