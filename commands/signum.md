@@ -1929,6 +1929,13 @@ jq -n \
 echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.json) findings"
 ```
 
+**Clear stale engineer artifacts before launching repair:**
+
+```bash
+# Remove stale artifacts so the success gate cannot accept leftovers from prior iterations
+rm -f .signum/execute_log.json .signum/combined.patch
+```
+
 **Launch repair engineer:**
 
 Use the Agent tool to launch the "engineer" agent with this prompt:
@@ -1945,7 +1952,7 @@ Write .signum/combined.patch and .signum/execute_log.json.
 **After engineer completes, validate execute success before re-running audit:**
 
 ```bash
-# Execute success gate: verify engineer produced required artifacts
+# Execute success gate: verify engineer produced NEW artifacts (stale ones were cleared above)
 if [ ! -f .signum/execute_log.json ]; then
   echo "REPAIR_SKIP: execute_log.json missing after repair engineer — skipping iteration $ITER_NUM"
   CURRENT_ITERATION=$ITER_NUM
