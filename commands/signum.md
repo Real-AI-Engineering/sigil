@@ -2043,21 +2043,22 @@ if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
   echo "Restoring best candidate from iteration $BEST_ITERATION"
   git clean -fd
   git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
+  # Always sync audit artifacts from best iteration so PACK reads consistent data
+  BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+  cp "${BEST_DIR}/combined.patch" .signum/
+  cp "${BEST_DIR}/mechanic_report.json" .signum/
+  cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
+  cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+  cp "${BEST_DIR}/audit_summary.json" .signum/
+
   if ! git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
     echo "ERROR: Failed to apply best candidate patch — forcing HUMAN_REVIEW"
     RESTORE_FAILED=true
     FINAL_DECISION="HUMAN_REVIEW"
+    # Override decision in the already-synced audit_summary
     jq '.decision = "HUMAN_REVIEW" | .terminalReason = "final restore of best candidate patch failed"' \
       .signum/audit_summary.json > .signum/audit_summary.json.tmp \
       && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
-  else
-    # Sync working copies only on successful apply — do NOT overwrite on failure
-    BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
-    cp "${BEST_DIR}/combined.patch" .signum/
-    cp "${BEST_DIR}/mechanic_report.json" .signum/
-    cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
-    cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
-    cp "${BEST_DIR}/audit_summary.json" .signum/
   fi
 fi
 
