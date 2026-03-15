@@ -96,7 +96,7 @@ Embeds all artifacts into a single self-contained `proofpack.json`. Each artifac
 
 ```json
 {
-  "schemaVersion": "4.0",
+  "schemaVersion": "4.2",
   "runId": "signum-2026-03-04-abc123",
   "decision": "AUTO_OK",
   "confidence": { "overall": 92 },

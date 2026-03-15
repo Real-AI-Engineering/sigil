@@ -113,7 +113,8 @@ rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json"
       "${DIR}policy_violations.json" "${DIR}spec_quality.json" \
       "${DIR}spec_validation.json" "${DIR}clover_report.json" \
       "${DIR}contract-hash.txt" "${DIR}execution_context.json" \
-      "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" 2>/dev/null || true
+      "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" \
+      "${DIR}audit_iteration_log.json" "${DIR}repair_brief.json" "${DIR}flaky_tests.json" 2>/dev/null || true
 
 # Update status in index.json
 update_contract_status "$CONTRACT_ID" "archived"
@@ -1354,6 +1355,34 @@ if [ -f "pyproject.toml" ] && grep -q "pytest" pyproject.toml 2>/dev/null; then
   [ -z "$TEST_FAILING" ] && TEST_FAILING='[]'
   NEW_FAILURES=$(jq -n --argjson curr "$TEST_FAILING" --argjson base "$BL_TEST_FAILING" \
     '[$curr[] | select(. as $t | $base | index($t) | not)]')
+
+  # Flaky test retry: for each new failure, run it twice more; mixed results → flaky
+  FLAKY_TESTS='[]'
+  CONFIRMED_FAILURES='[]'
+  if [ "$(echo "$NEW_FAILURES" | jq 'length')" -gt 0 ]; then
+    while IFS= read -r TEST_NAME; do
+      R1=$(pytest "$TEST_NAME" --tb=no -q 2>&1; echo "EXIT:$?")
+      R2=$(pytest "$TEST_NAME" --tb=no -q 2>&1; echo "EXIT:$?")
+      E1=$(echo "$R1" | grep "EXIT:" | sed 's/EXIT://')
+      E2=$(echo "$R2" | grep "EXIT:" | sed 's/EXIT://')
+      if [ "$E1" != "$E2" ] || ([ "$E1" = "0" ] && [ "$E2" = "0" ]); then
+        # Mixed results or both pass on retry → flaky
+        FLAKY_TESTS=$(echo "$FLAKY_TESTS" | jq --arg t "$TEST_NAME" '. + [$t]')
+      else
+        # Consistently failing → confirmed failure
+        CONFIRMED_FAILURES=$(echo "$CONFIRMED_FAILURES" | jq --arg t "$TEST_NAME" '. + [$t]')
+      fi
+    done < <(echo "$NEW_FAILURES" | jq -r '.[]')
+    NEW_FAILURES="$CONFIRMED_FAILURES"
+  fi
+
+  # Persist flaky tests
+  jq -n --argjson flaky "$FLAKY_TESTS" \
+    '{"detectedAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'", "flakyTests": $flaky}' \
+    > .signum/flaky_tests.json
+  if [ "$(echo "$FLAKY_TESTS" | jq 'length')" -gt 0 ]; then
+    echo "Flaky tests detected (removed from NEW_FAILURES): $(echo "$FLAKY_TESTS" | jq -r '.[]' | tr '\n' ' ')"
+  fi
 elif [ -f "package.json" ] && grep -q '"test"' package.json 2>/dev/null; then
   TEST_OUT=$(npm test 2>&1); TEST_EXIT=$?
   TEST_FAILING='[]'
@@ -1743,7 +1772,14 @@ AUDIT_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
 HAS_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR" or .severity == "CRITICAL")] | length' .signum/audit_summary.json)
 HAS_REGRESSIONS=$(jq -r '.mechanic' .signum/audit_summary.json | grep -q "regression" && echo "true" || echo "false")
 HOLDOUT_FAILURES=$(jq -r '.holdout.failed // 0' .signum/audit_summary.json)
-ITERATION_SCORE=$(jq -r '.iterationScore // 0' .signum/audit_summary.json)
+
+# Compute iteration score from audit_summary findings (synthesizer only emits iterationScore in iterative mode)
+_CRITICALS=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL")] | length' .signum/audit_summary.json)
+_MAJORS=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
+_MINORS=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
+_MECH_REGRESSIONS=$(jq 'if .hasRegressions then 1 else 0 end' .signum/mechanic_report.json)
+_HOLDOUT_FAILURES=$(jq '.failed // 0' .signum/holdout_report.json 2>/dev/null || echo 0)
+ITERATION_SCORE=$(( -(_CRITICALS * 1000) - (_MECH_REGRESSIONS * 500) - (_HOLDOUT_FAILURES * 200) - (_MAJORS * 50) - (_MINORS * 1) ))
 
 echo "Pass 1: decision=$AUDIT_DECISION major_findings=$HAS_MAJOR regressions=$HAS_REGRESSIONS holdout_failures=$HOLDOUT_FAILURES score=$ITERATION_SCORE"
 ```
@@ -1766,8 +1802,9 @@ cp .signum/audit_summary.json .signum/iterations/01/
 # Initialize iteration log
 BEST_SCORE=$ITERATION_SCORE
 BEST_ITERATION=1
-jq -n --argjson score "$ITERATION_SCORE" \
-  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'"}]' \
+PASS1_FINDINGS=$(jq '[.reviews[].findings[]? | {fingerprint: .fingerprint, severity: .severity, category: .category, file: .file, line: .line}] | unique_by(.fingerprint // (.file + ":" + (.line | tostring) + ":" + .category))' .signum/audit_summary.json)
+jq -n --argjson score "$ITERATION_SCORE" --argjson findings "$PASS1_FINDINGS" \
+  '[{"pass": 1, "score": $score, "decision": "'"$AUDIT_DECISION"'", "canonicalFindings": $findings}]' \
   > .signum/audit_iteration_log.json
 
 echo "Iteration 1 stored. Best score: $BEST_SCORE"
@@ -1860,9 +1897,10 @@ if [ "$ITERATION_SCORE" -lt "$BEST_SCORE" ] && [ "$CURRENT_ITERATION" -gt 1 ]; t
   echo "Current score ($ITERATION_SCORE) worse than best ($BEST_SCORE at iteration $BEST_ITERATION). Rolling back."
   git clean -fd
   git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
-  git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch
+  git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch || { echo "ROLLBACK_FAILED: git apply failed for iteration $BEST_ITERATION"; }
   # Sync .signum/ working copies from best iteration
   BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
+  cp "${BEST_DIR}/combined.patch" .signum/ 2>/dev/null || true
   cp "${BEST_DIR}/mechanic_report.json" .signum/ 2>/dev/null || true
   cp "${BEST_DIR}/holdout_report.json" .signum/ 2>/dev/null || true
   cp "${BEST_DIR}/reviews/"*.json .signum/reviews/ 2>/dev/null || true
@@ -1883,7 +1921,30 @@ After fixing, run the visible AC verifies to confirm you didn't break them.
 Write .signum/combined.patch and .signum/execute_log.json.
 ```
 
-**After engineer completes, re-run the full audit subpipeline:**
+**After engineer completes, validate execute success before re-running audit:**
+
+```bash
+# Execute success gate: verify engineer produced required artifacts
+if [ ! -f .signum/execute_log.json ]; then
+  echo "REPAIR_SKIP: execute_log.json missing after repair engineer — skipping iteration $ITER_NUM"
+  CURRENT_ITERATION=$ITER_NUM
+  continue
+fi
+REPAIR_STATUS=$(jq -r '.status // "unknown"' .signum/execute_log.json)
+if [ "$REPAIR_STATUS" != "SUCCESS" ]; then
+  echo "REPAIR_SKIP: execute_log.json status=$REPAIR_STATUS (not SUCCESS) — skipping iteration $ITER_NUM"
+  CURRENT_ITERATION=$ITER_NUM
+  continue
+fi
+if [ ! -f .signum/combined.patch ]; then
+  echo "REPAIR_SKIP: combined.patch missing after repair engineer — skipping iteration $ITER_NUM"
+  CURRENT_ITERATION=$ITER_NUM
+  continue
+fi
+echo "Repair engineer succeeded for iteration $ITER_NUM — proceeding to audit"
+```
+
+**Re-run the full audit subpipeline:**
 
 Re-run Steps 2.4 (scope gate), 2.5 (policy compliance if applicable), 3.0.5 (repo-contract invariants), 3.1 (mechanic), 3.1.5 (holdout validation), 3.2-3.3.5 (reviews — risk-proportional), and 3.5 (synthesizer).
 
@@ -1915,9 +1976,12 @@ cp .signum/repair_brief.json "$ITER_DIR/"
 NEW_SCORE=$(jq -r '.iterationScore // 0' .signum/audit_summary.json)
 NEW_DECISION=$(jq -r '.decision' .signum/audit_summary.json)
 
+# Extract deduplicated findings with fingerprints for cross-iteration comparison
+NEW_FINDINGS=$(jq '[.reviews[].findings[]? | {fingerprint: .fingerprint, severity: .severity, category: .category, file: .file, line: .line}] | unique_by(.fingerprint // (.file + ":" + (.line | tostring) + ":" + .category))' .signum/audit_summary.json)
+
 # Update iteration log
-jq --argjson score "$NEW_SCORE" --arg decision "$NEW_DECISION" --argjson pass "$ITER_NUM" \
-  '. + [{"pass": $pass, "score": $score, "decision": $decision}]' \
+jq --argjson score "$NEW_SCORE" --arg decision "$NEW_DECISION" --argjson pass "$ITER_NUM" --argjson findings "$NEW_FINDINGS" \
+  '. + [{"pass": $pass, "score": $score, "decision": $decision, "canonicalFindings": $findings}]' \
   .signum/audit_iteration_log.json > .signum/audit_iteration_log.json.tmp \
   && mv .signum/audit_iteration_log.json.tmp .signum/audit_iteration_log.json
 
@@ -1952,10 +2016,13 @@ if [ "$BEST_ITERATION" -ne "$CURRENT_ITERATION" ]; then
   echo "Restoring best candidate from iteration $BEST_ITERATION"
   git clean -fd
   git checkout $(jq -r '.base_commit' .signum/execution_context.json) -- .
-  git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch || {
-    echo "ERROR: Failed to apply best candidate patch"
-    # Terminal HUMAN_REVIEW
-  }
+  if ! git apply .signum/iterations/$(printf '%02d' $BEST_ITERATION)/combined.patch; then
+    echo "ERROR: Failed to apply best candidate patch — forcing HUMAN_REVIEW"
+    FINAL_DECISION="HUMAN_REVIEW"
+    jq '.decision = "HUMAN_REVIEW" | .terminalReason = "final restore of best candidate patch failed"' \
+      .signum/audit_summary.json > .signum/audit_summary.json.tmp \
+      && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
+  fi
   # Sync working copies
   BEST_DIR=".signum/iterations/$(printf '%02d' $BEST_ITERATION)"
   cp "${BEST_DIR}/combined.patch" .signum/
@@ -1977,12 +2044,18 @@ REMAINING_CRITICAL=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL
 REMAINING_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
 REMAINING_MINOR=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
 
+BEST_MECH_REGRESSIONS=$(jq -r '.hasRegressions' .signum/audit_summary.json 2>/dev/null || echo "false")
+BEST_HOLDOUT_FAILED=$(jq '.holdout.failed // 0' .signum/audit_summary.json 2>/dev/null || echo 0)
+
 if [ "$REMAINING_CRITICAL" -gt 0 ]; then
   FINAL_DECISION="AUTO_BLOCK"
   REMAINING_SEV="CRITICAL"
 elif [ "$REMAINING_MAJOR" -gt 0 ]; then
   FINAL_DECISION="HUMAN_REVIEW"
   REMAINING_SEV="MAJOR"
+elif [ "$BEST_MECH_REGRESSIONS" = "true" ] || [ "$BEST_HOLDOUT_FAILED" -gt 0 ]; then
+  FINAL_DECISION="HUMAN_REVIEW"
+  REMAINING_SEV="mechanic/holdout"
 elif [ "$REMAINING_MINOR" -gt 0 ]; then
   FINAL_DECISION="AUTO_OK"
   REMAINING_SEV="MINOR"
@@ -2026,7 +2099,7 @@ Proceed to Phase 4: PACK.
 
 ## Phase 4: PACK
 
-**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.1) with embedded artifact contents.
+**Goal:** Bundle all artifacts into a self-contained, verifiable proof package (schema v4.2) with embedded artifact contents.
 
 ### Step 4.0: Transition contract status to completed
 
@@ -2212,10 +2285,22 @@ fi
 # Extract contractId for lineage
 PACK_CONTRACT_ID=$(jq -r '.contractId // empty' .signum/contract.json)
 
+# Read iteration metadata for iterativeAudit section
+ITERATIONS_USED_PACK=$(jq -r '.iterationsUsed // 1' .signum/audit_summary.json 2>/dev/null || echo 1)
+BEST_ITERATION_PACK=$(jq -r '.bestIteration // 1' .signum/audit_summary.json 2>/dev/null || echo 1)
+ITERATIVE_AUDIT_JSON="null"
+if [ "$ITERATIONS_USED_PACK" -gt 1 ] && [ -f .signum/audit_iteration_log.json ]; then
+  ITERATIVE_AUDIT_JSON=$(jq -n \
+    --argjson iters_used "$ITERATIONS_USED_PACK" \
+    --argjson best "$BEST_ITERATION_PACK" \
+    --argjson log "$(cat .signum/audit_iteration_log.json)" \
+    '{iterationsUsed: $iters_used, bestIteration: $best, auditIterations: $log}')
+fi
+
 # Final assembly
 jq -n \
-  --arg schemaVersion "4.1" \
-  --arg signumVersion "4.1.0" \
+  --arg schemaVersion "4.2" \
+  --arg signumVersion "4.2.0" \
   --arg createdAt "$RUN_DATE" \
   --arg runId "$RUN_ID" \
   --arg contractId "$PACK_CONTRACT_ID" \
@@ -2237,6 +2322,7 @@ jq -n \
   --arg contractSource "$CONTRACT_SOURCE" \
   --argjson ciContext "$CI_CONTEXT" \
   --argjson baselineComp "$BASELINE_COMP" \
+  --argjson iterativeAuditJson "$ITERATIVE_AUDIT_JSON" \
   '{
     schemaVersion: $schemaVersion,
     signumVersion: $signumVersion,
@@ -2266,12 +2352,13 @@ jq -n \
   }
   | if $ciContext != null then . + {ciContext: $ciContext} else . end
   | if $baselineComp != null then . + {baselineComparison: $baselineComp} else . end
+  | if $iterativeAuditJson != null then . + {iterativeAudit: $iterativeAuditJson} else . end
   ' > .signum/proofpack.json
 
 # Cleanup temp files
 rm -f "$REDACTED_CONTRACT"
 
-echo "Proofpack written: $RUN_ID (schema v4.1)"
+echo "Proofpack written: $RUN_ID (schema v4.2)"
 ```
 
 ### Step 4.2: Update contract status

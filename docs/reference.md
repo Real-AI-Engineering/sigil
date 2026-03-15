@@ -145,7 +145,7 @@ The proofpack includes an `iterativeAudit` section when >1 iteration was used, w
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schemaVersion` | `"4.0"` or `"4.1"` | Schema version (v4.1 adds ciContext, baselineComparison, contractSource) |
+| `schemaVersion` | `"4.2"` | Schema version (v4.2 adds iterativeAudit, ciContext, baselineComparison, contractSource) |
 | `signumVersion` | string | Signum version that generated this proofpack |
 | `createdAt` | string | ISO 8601 timestamp of proofpack creation |
 | `runId` | string | `signum-YYYY-MM-DD-XXXXXX` |
