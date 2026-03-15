@@ -2499,9 +2499,12 @@ echo "Repair engineer succeeded for iteration $ITER_NUM — proceeding to audit"
 
 # Capture iteration delta and regenerate combined.patch from same snapshot
 BASE=$(jq -r '.base_commit' .signum/execution_context.json)
-git add -A  # stage new files so they appear in diffs
+# Stage temporarily to capture new/untracked files in diffs
+git add -A
 git diff --cached > .signum/iteration_delta.patch 2>/dev/null || true
 git diff --cached "$BASE" > .signum/combined.patch 2>/dev/null || true
+# Unstage immediately so scope gate (git diff --name-only) works correctly in audit rerun
+git reset HEAD -- . > /dev/null 2>&1 || true
 DELTA_SIZE=$(wc -c < .signum/iteration_delta.patch 2>/dev/null || echo 0)
 FULL_SIZE=$(wc -c < .signum/combined.patch 2>/dev/null || echo 0)
 echo "Delta: $DELTA_SIZE bytes, Full: $FULL_SIZE bytes"
