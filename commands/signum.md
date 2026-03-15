@@ -2082,41 +2082,46 @@ if [ "$RESTORE_FAILED" != "true" ]; then
   if [ "$REMAINING_CRITICAL" -gt 0 ]; then
     FINAL_DECISION="AUTO_BLOCK"
     REMAINING_SEV="CRITICAL"
+    TERMINAL_REASON="$REMAINING_MAJOR MAJOR + $REMAINING_CRITICAL CRITICAL findings persist after $ITERATIONS_USED iterations"
   elif [ "$REMAINING_MAJOR" -gt 0 ]; then
     FINAL_DECISION="HUMAN_REVIEW"
     REMAINING_SEV="MAJOR"
+    TERMINAL_REASON="$REMAINING_MAJOR MAJOR + $REMAINING_CRITICAL CRITICAL findings persist after $ITERATIONS_USED iterations"
   elif [ "$BEST_MECH_REGRESSIONS" = "true" ] || [ "$BEST_HOLDOUT_FAILED" -gt 0 ]; then
     FINAL_DECISION="HUMAN_REVIEW"
     REMAINING_SEV="MAJOR"
+    TERMINAL_REASON="mechanic regressions and/or holdout failures persist (mapped to MAJOR)"
   elif [ "$REMAINING_MINOR" -gt 0 ]; then
     FINAL_DECISION="AUTO_OK"
     REMAINING_SEV="MINOR"
+    TERMINAL_REASON=""
   else
     FINAL_DECISION="AUTO_OK"
     REMAINING_SEV="none"
+    TERMINAL_REASON=""
   fi
-fi
 
-# Update audit_summary with iteration metadata
-jq --argjson iters_used "$ITERATIONS_USED" \
-   --argjson iters_max "$MAX_ITERATIONS" \
-   --argjson best "$BEST_ITERATION" \
-   --arg early_stop "$EARLY_STOP" \
-   --arg early_stop_reason "$EARLY_STOP_REASON" \
-   --arg remaining_sev "$REMAINING_SEV" \
-   --arg final_decision "$FINAL_DECISION" \
-   --arg terminal_reason "$REMAINING_MAJOR MAJOR + $REMAINING_CRITICAL CRITICAL findings persist after $ITERATIONS_USED iterations" \
-   '. + {
-     decision: $final_decision,
-     iterationsUsed: $iters_used,
-     iterationsMax: $iters_max,
-     bestIteration: $best,
-     earlyStop: ($early_stop == "true"),
-     earlyStopReason: (if $early_stop_reason != "" then $early_stop_reason else null end),
-     terminalReason: (if $final_decision != "AUTO_OK" then $terminal_reason else null end),
-     remainingSeverity: $remaining_sev
-   }' .signum/audit_summary.json > .signum/audit_summary.json.tmp \
-   && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
+  # Update audit_summary with iteration metadata
+  jq --argjson iters_used "$ITERATIONS_USED" \
+     --argjson iters_max "$MAX_ITERATIONS" \
+     --argjson best "$BEST_ITERATION" \
+     --arg early_stop "$EARLY_STOP" \
+     --arg early_stop_reason "$EARLY_STOP_REASON" \
+     --arg remaining_sev "$REMAINING_SEV" \
+     --arg final_decision "$FINAL_DECISION" \
+     --arg terminal_reason "$TERMINAL_REASON" \
+     '. + {
+       decision: $final_decision,
+       iterationsUsed: $iters_used,
+       iterationsMax: $iters_max,
+       bestIteration: $best,
+       earlyStop: ($early_stop == "true"),
+       earlyStopReason: (if $early_stop_reason != "" then $early_stop_reason else null end),
+       terminalReason: (if $final_decision != "AUTO_OK" then $terminal_reason else null end),
+       remainingSeverity: $remaining_sev
+     }' .signum/audit_summary.json > .signum/audit_summary.json.tmp \
+     && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
+fi
 
 echo "=== ITERATIVE AUDIT COMPLETE ==="
 echo "Iterations: $ITERATIONS_USED/$MAX_ITERATIONS (best: $BEST_ITERATION)"
@@ -2329,15 +2334,16 @@ if [ "$ITERATIONS_USED_PACK" -gt 1 ] && [ -f .signum/audit_iteration_log.json ];
   PACK_EARLY_STOP_REASON=$(jq -r '.earlyStopReason // ""' .signum/audit_summary.json 2>/dev/null || echo "")
   PACK_TERMINAL_REASON=$(jq -r '.terminalReason // ""' .signum/audit_summary.json 2>/dev/null || echo "")
   PACK_REMAINING_SEV=$(jq -r '.remainingSeverity // "none"' .signum/audit_summary.json 2>/dev/null || echo "none")
-  # Build resolvedFindings: findings present in pass 1 but absent in final pass (by fingerprint)
+  # Build resolvedFindings: findings present in pass 1 but absent in best pass (by fingerprint)
   PACK_RESOLVED=$(jq -n \
     --argjson log "$(cat .signum/audit_iteration_log.json)" \
+    --argjson best "$BEST_ITERATION_PACK" \
     '($log[0].canonicalFindings // []) as $first |
-     ($log[-1].canonicalFindings // []) as $last |
+     ($log[$best - 1].canonicalFindings // []) as $last |
      ($last | map(.fingerprint // (.file + ":" + (.line|tostring) + ":" + .category))) as $lastFps |
      [$first[] | select((.fingerprint // (.file + ":" + (.line|tostring) + ":" + .category)) as $fp | $lastFps | index($fp) | not)]')
-  # Build remainingFindings: findings present in the final pass
-  PACK_REMAINING=$(jq '[-1].canonicalFindings // []' .signum/audit_iteration_log.json 2>/dev/null || echo "[]")
+  # Build remainingFindings: findings present in the best pass
+  PACK_REMAINING=$(jq --argjson best "$BEST_ITERATION_PACK" '.[$best - 1].canonicalFindings // []' .signum/audit_iteration_log.json 2>/dev/null || echo "[]")
   ITERATIVE_AUDIT_JSON=$(jq -n \
     --argjson iters_used "$ITERATIONS_USED_PACK" \
     --argjson iters_max "$PACK_ITERS_MAX" \
