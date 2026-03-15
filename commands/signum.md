@@ -2070,6 +2070,21 @@ EARLY_STOP_REASON=""
 [ "$EARLY_STOP" = "true" ] && EARLY_STOP_REASON="no improvement for 2 consecutive iterations"
 [ "$CURRENT_ITERATION" -ge "$MAX_ITERATIONS" ] && EARLY_STOP="true" && EARLY_STOP_REASON="max iterations reached"
 
+# Write iteration metadata unconditionally so PACK always has correct fields
+jq --argjson iters_used "$ITERATIONS_USED" \
+   --argjson iters_max "$MAX_ITERATIONS" \
+   --argjson best "$BEST_ITERATION" \
+   --arg early_stop "$EARLY_STOP" \
+   --arg early_stop_reason "$EARLY_STOP_REASON" \
+   '. + {
+     iterationsUsed: $iters_used,
+     iterationsMax: $iters_max,
+     bestIteration: $best,
+     earlyStop: ($early_stop == "true"),
+     earlyStopReason: (if $early_stop_reason != "" then $early_stop_reason else null end)
+   }' .signum/audit_summary.json > .signum/audit_summary.json.tmp \
+   && mv .signum/audit_summary.json.tmp .signum/audit_summary.json
+
 if [ "$RESTORE_FAILED" != "true" ]; then
   # Terminal override based on remaining findings in best candidate
   REMAINING_CRITICAL=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL")] | length' .signum/audit_summary.json)
@@ -2101,22 +2116,12 @@ if [ "$RESTORE_FAILED" != "true" ]; then
     TERMINAL_REASON=""
   fi
 
-  # Update audit_summary with iteration metadata
-  jq --argjson iters_used "$ITERATIONS_USED" \
-     --argjson iters_max "$MAX_ITERATIONS" \
-     --argjson best "$BEST_ITERATION" \
-     --arg early_stop "$EARLY_STOP" \
-     --arg early_stop_reason "$EARLY_STOP_REASON" \
-     --arg remaining_sev "$REMAINING_SEV" \
+  # Update audit_summary with decision metadata
+  jq --arg remaining_sev "$REMAINING_SEV" \
      --arg final_decision "$FINAL_DECISION" \
      --arg terminal_reason "$TERMINAL_REASON" \
      '. + {
        decision: $final_decision,
-       iterationsUsed: $iters_used,
-       iterationsMax: $iters_max,
-       bestIteration: $best,
-       earlyStop: ($early_stop == "true"),
-       earlyStopReason: (if $early_stop_reason != "" then $early_stop_reason else null end),
        terminalReason: (if $final_decision != "AUTO_OK" then $terminal_reason else null end),
        remainingSeverity: $remaining_sev
      }' .signum/audit_summary.json > .signum/audit_summary.json.tmp \
