@@ -279,7 +279,6 @@ No new exit codes needed:
 New env vars:
 ```
 SIGNUM_AUDIT_MAX_ITERATIONS — default 20
-SIGNUM_AUDIT_TIMEOUT — default 45m (total AUDIT budget, graceful stop)
 SIGNUM_CI_RELAXED — if "true", HUMAN_REVIEW maps to exit 0 instead of 78
 ```
 
@@ -328,23 +327,6 @@ Flaky state persisted in `.signum/flaky_tests.json`:
 }
 ```
 
-### 16. Wall-Clock Budget Enforcement
-
-Check before each iteration:
-
-```bash
-AUDIT_START=$(date +%s)
-TIMEOUT_SECONDS=$((${SIGNUM_AUDIT_TIMEOUT_MINUTES:-45} * 60))
-DEADLINE=$((AUDIT_START + TIMEOUT_SECONDS))
-
-# Before each iteration:
-NOW=$(date +%s)
-if [ $NOW -ge $DEADLINE ]; then
-  echo "Wall-clock budget exceeded. Finalizing from best iteration."
-  # earlyStop + finalize from bestIteration
-fi
-```
-
 ## Risks
 
 1. **Cost explosion** — mitigated by early stop + best-of-N (won't burn 20 iterations on oscillation)
@@ -356,19 +338,7 @@ fi
 
 ### Q1: Wall-clock budget
 
-**Yes. Total AUDIT budget, not per-iteration. Default 45m. Graceful stop.**
-
-```
-SIGNUM_AUDIT_TIMEOUT=45m  (default, configurable)
-```
-
-Behavior:
-- Check deadline before starting each repair iteration
-- If budget expires mid-iteration: let current iteration finish, then stop
-- Finalize from `bestIteration`, write `earlyStopReason: "wall_clock_budget_exceeded"`
-- Signum never hard-kills itself — outer CI job timeout (set slightly above 45m) serves as crash protection
-
-Rationale: CI expects `proofpack.json`; hard kill would leave no artifact. Per-iteration timeout is wrong granularity — high-risk passes are naturally slower. Total budget controls runaway runtime.
+**Deferred.** Early stop + max iterations are sufficient for now. Wall-clock budget (`SIGNUM_AUDIT_TIMEOUT`) can be added later when we have real data on iteration durations. Outer CI job timeout serves as crash protection in the meantime.
 
 ### Q2: Rollback mechanism
 
