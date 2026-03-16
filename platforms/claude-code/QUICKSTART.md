@@ -91,8 +91,81 @@ Risk-proportional audit:
 - **Medium risk** — Claude + available externals (3-5 min)
 - **High risk** — Full 3-model panel (5-10 min)
 
+## 6. Set Up Your Project (Recommended)
+
+Signum works without any setup — just run `/signum "task"`. But for best results in existing projects, add these optional files:
+
+### project.intent.md (recommended)
+
+Tells the contractor what your project is about. Without it, medium/high-risk tasks trigger a blocking question.
+
+```bash
+cat > project.intent.md << 'EOF'
+# <Project Name> — Project Intent
+
+## Goal
+<1-2 sentences: what this project does>
+
+## Core Capabilities
+- <capability 1>
+- <capability 2>
+
+## Non-Goals
+- <what this project does NOT do>
+
+## Success Criteria
+- <measurable outcome 1>
+- <measurable outcome 2>
+EOF
+```
+
+The contractor reads this before generating contracts — non-goals flow into `outOfScope`, terms into acceptance criteria language.
+
+### project.glossary.json (optional)
+
+Enforces consistent terminology. The glossary check warns when contracts use forbidden synonyms.
+
+```bash
+cat > project.glossary.json << 'EOF'
+{
+  "version": "1.0.0",
+  "canonicalTerms": ["your", "canonical", "terms"],
+  "aliases": {
+    "forbidden-synonym": "canonical-term"
+  }
+}
+EOF
+```
+
+### repo-contract.json (optional)
+
+Invariants that must always hold. Any regression is AUTO_BLOCK regardless of task.
+
+```bash
+cat > repo-contract.json << 'EOF'
+{
+  "schemaVersion": "1.0",
+  "invariants": [
+    { "id": "I-1", "description": "All tests pass", "verify": "npm test", "severity": "critical" },
+    { "id": "I-2", "description": "No lint errors", "verify": "npm run lint", "severity": "high" }
+  ],
+  "owner": "human"
+}
+EOF
+```
+
+### First run checklist
+
+1. `cd your-project`
+2. Create `project.intent.md` (or skip — Signum will ask)
+3. Run: `/signum "describe your first task"`
+4. Review the contract when prompted (5-item checklist)
+5. Check `.signum/proofpack.json` for the result
+
+`.signum/` is auto-added to `.gitignore`. No cleanup needed.
+
 ## Next Steps
 
 - Run `/signum` on a real task in your project
 - Check `.signum/audit_summary.json` after a run to understand findings
-- Use `lib/signum-ci.sh` to integrate into CI/CD
+- Add `repo-contract.json` for project-wide invariant enforcement
