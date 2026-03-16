@@ -140,7 +140,7 @@ Should be a **signum command** (`commands/init.md`) rather than standalone scrip
 3. **Foundation files = always loaded** (Kiro insight) — intent/glossary should be read by every contractor invocation
 4. **Existing context preserved** (all tools) — if files exist, merge/update, don't overwrite
 
-## Gaps Found (Codex review, GPT-5.4)
+## Gaps Found + Solutions (Codex review + deep research)
 
 1. **Source precedence** — `docs/how-it-works.md` more authoritative than README for Goal. Need ranking, not averaging
 2. **Deep docs scan** — `docs/research/`, `docs/plans/`, `docs/reference.md` missed by "first 200 lines of docs/*.md"
@@ -153,6 +153,102 @@ Should be a **signum command** (`commands/init.md`) rather than standalone scrip
 9. **Low confidence mode** — when sources empty/contradictory, emit `TODO/Needs confirmation` not fiction. Per-section evidence + confidence
 10. **Glossary verification** — check coverage of real nouns in authoritative docs, not hypothetical contract
 
+## Solutions per Gap
+
+### Gap 1: Non-Goals hallucination
+**Problem:** Inferring non-goals from what's absent in code = fabrication.
+**Solution:** Only extract from explicit negative signals:
+- `docs/adr/` with status "Rejected" or "Deprecated" (log4brains format)
+- README sections: "Not supported", "Out of scope", "Limitations"
+- CLAUDE.md/AGENTS.md: explicit exclusions
+- `.github/ISSUE_TEMPLATE/` with "won't fix" labels
+- If zero signals found → emit `Non-Goals: TODO — no explicit non-goals found. Add manually.`
+
+### Gap 2: Low confidence mode
+**Problem:** LLM confidently generates fiction for sparse sections.
+**Solution:** Per-section evidence tracking:
+```markdown
+## Core Capabilities
+<!-- evidence: README.md:L12-L25, package.json scripts, 3 sources -->
+<!-- confidence: high -->
+- capability 1
+- capability 2
+
+## Non-Goals
+<!-- evidence: none found -->
+<!-- confidence: low -->
+- TODO: No explicit non-goals detected. Review and add manually.
+```
+Use sampling-based consistency: generate 3 variants, keep only claims present in 2+.
+
+### Gap 3: Source precedence
+**Problem:** README description often generic marketing, docs/ has real technical truth.
+**Solution:** Ranked source hierarchy:
+1. `docs/how-it-works.md`, `docs/architecture.md` → Goal, Capabilities (authoritative)
+2. `CLAUDE.md`, `AGENTS.md` → Conventions, Non-Goals (explicit instructions)
+3. `README.md` first paragraph → Goal fallback
+4. `package.json`/`pyproject.toml` description → Goal last resort
+5. `git log --dirstat` → Capabilities validation
+
+### Gap 4: Build/CI signals
+**Problem:** README badges weak for Success Criteria.
+**Solution:** Read task runner configs as first-class:
+- `Makefile` / `justfile` / `Taskfile.yml` → extract target names as capabilities
+- `.github/workflows/*.yml` → extract job names + success conditions
+- `pytest.ini` / `ruff.toml` / `tsconfig.json` → extract quality gates
+- `docker-compose.yml` → extract service names as capabilities
+- Map to Success Criteria: "CI green", "lint pass", "tests pass", specific job names
+
+### Gap 5: Public entrypoints
+**Problem:** Directory structure alone misses user-facing surface area.
+**Solution:** Scan for entrypoints:
+- `bin/`, `commands/`, `skills/` → CLI commands as capabilities
+- `package.json` `bin` / `scripts` fields → named commands
+- `pyproject.toml` `[project.scripts]` → console_scripts
+- `src/main.rs`, `cmd/` → binary entrypoints
+- OpenAPI/swagger files → API surface
+- Extract Personas from usage patterns in entrypoints
+
+### Gap 6: Ignore set
+**Solution:** Hardcoded exclusion list:
+```
+.git, .signum/, .signum, node_modules/, dist/, build/, .venv/,
+__pycache__/, coverage/, .next/, .nuxt/, target/,
+tests/fixtures/, tests/snapshots/, *.min.js, *.bundle.*
+```
+Plus respect `.gitignore` patterns.
+
+### Gap 7: Git log horizon
+**Problem:** `git log -20` shows current sprint, not project essence.
+**Solution:** Use `git log --dirstat=files --since="6 months ago"` aggregated by top-level directory. Shows sustained activity patterns, not recent churn.
+```bash
+git log --dirstat=files,10 --since="6 months ago" | grep -E '^\s+[0-9]' | sort -rn | head -20
+```
+
+### Gap 8: Glossary merge/update
+**Solution:** If `project.glossary.json` exists:
+1. Load existing terms as SSoT
+2. Scan code for NEW terms not in glossary (suggest additions)
+3. Never remove existing entries
+4. Present diff: "Found 5 new terms, 0 conflicts. Add? [y/n]"
+
+### Gap 9: Glossary verification
+**Solution:** After generation, verify coverage:
+```bash
+# Extract nouns from authoritative docs
+grep -oiE '\b[A-Z][a-z]+([A-Z][a-z]+)+\b' README.md docs/*.md | sort -u
+# Compare against canonicalTerms
+# Report: "Glossary covers 15/23 domain terms (65%)"
+```
+
+### Gap 10: Deep docs scan
+**Solution:** Read not just top-level `docs/*.md` but:
+- `docs/research/*.md` (frontmatter only for topics)
+- `docs/plans/*.md` (for capabilities/roadmap)
+- `docs/adr/*.md` (for non-goals from rejected decisions)
+- `docs/reference.md` (for glossary terms)
+- Limit: first 100 lines per file, max 10 files
+
 ## Sources
 
 - [Kiro Steering Docs](https://kiro.dev/docs/steering/)
@@ -163,3 +259,10 @@ Should be a **signum command** (`commands/init.md`) rather than standalone scrip
 - [Codified Context (arXiv)](https://arxiv.org/html/2602.20478v1)
 - [Mastering Project Context Files](https://eclipsesource.com/blogs/2025/11/20/mastering-project-context-files-for-ai-coding-agents/)
 - [Build your own /init](https://kau.sh/blog/build-ai-init-command/)
+- [Stop AI Hallucinations: 4 Essential Techniques](https://dev.to/aws/stop-ai-agent-hallucinations-4-essential-techniques-2i94)
+- [LLM Uncertainty Quantification (OpenReview)](https://openreview.net/forum?id=gjeQKFxFpZ)
+- [Automatic Glossary Construction from Source Code (FSE'19)](https://mingwei-liu.github.io/assets/pdf/fse19-wang-glossary.pdf)
+- [Domain Term Extraction via Contextual Embeddings](https://arxiv.org/html/2502.17278v1)
+- [just-mcp: Expose justfile to AI agents](https://github.com/toolprint/just-mcp)
+- [git-quick-stats](https://github.com/git-quick-stats/git-quick-stats)
+- [AGENTS.md best practices](https://gist.github.com/0xfauzi/7c8f65572930a21efa62623557d83f6e)
