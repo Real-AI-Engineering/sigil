@@ -21,6 +21,15 @@ echo "Updating $PLUGIN_NAME to v$VERSION..."
 echo ""
 
 # ---------------------------------------------------------------------------
+# Step 0: Safety checks
+# ---------------------------------------------------------------------------
+if pgrep -qf "claude.*code" 2>/dev/null || pgrep -qf "claude-code" 2>/dev/null; then
+  echo "WARNING: Claude Code appears to be running."
+  echo "  Changes will only take effect after restart."
+  echo ""
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1: Fast-forward ALL marketplace clones (fix for #29071)
 # ---------------------------------------------------------------------------
 echo "Step 1: Updating marketplace clones..."
@@ -46,16 +55,53 @@ echo "  Updated $UPDATED_MPS marketplace(s)"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 2: Clear ALL stale caches (fix for #14061)
+# Step 2: Uninstall BEFORE clearing cache (Gemini review: uninstall needs cache)
 # ---------------------------------------------------------------------------
-echo "Step 2: Clearing stale caches..."
+echo "Step 2: CLI uninstall (before cache clear)..."
+claude plugin uninstall "$PLUGIN_NAME@$MARKETPLACE" --scope user 2>/dev/null || true
+
+# Also clean up orphan entries from other marketplaces (e.g., signum@nex-devtools)
+for settings_file in \
+  "$HOME/.claude/settings.json" \
+  "$HOME/.claude-profiles"/*/config/settings.json; do
+  [ -f "$settings_file" ] || continue
+  # Find signum entries NOT from our target marketplace
+  ORPHANS=$(python3 -c "
+import json, sys
+with open('$settings_file') as f:
+    s = json.load(f)
+plugins = s.get('enabledPlugins', {})
+orphans = [k for k in plugins if k.startswith('$PLUGIN_NAME@') and k != '$PLUGIN_NAME@$MARKETPLACE']
+for o in orphans: print(o)
+" 2>/dev/null || true)
+
+  if [ -n "$ORPHANS" ]; then
+    for orphan in $ORPHANS; do
+      echo "  Removing orphan: $orphan from $settings_file"
+      python3 -c "
+import json
+with open('$settings_file') as f:
+    s = json.load(f)
+s.get('enabledPlugins', {}).pop('$orphan', None)
+with open('$settings_file', 'w') as f:
+    json.dump(s, f, indent=2)
+    f.write('\n')
+" 2>/dev/null || true
+    done
+  fi
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 3: Clear ALL stale caches (fix for #14061)
+# ---------------------------------------------------------------------------
+echo "Step 3: Clearing stale caches..."
 CLEARED=0
 for cache_dir in \
   "$HOME/.claude/plugins/cache"/*/"$PLUGIN_NAME" \
   "$HOME/.claude-profiles"/*/config/plugins/cache/*/"$PLUGIN_NAME"; do
   [ -d "$cache_dir" ] || continue
 
-  # List versions being removed
   VERSIONS=$(ls "$cache_dir/" 2>/dev/null | tr '\n' ' ')
   echo "  Removing: $cache_dir ($VERSIONS)"
   rm -rf "$cache_dir"
@@ -65,9 +111,9 @@ echo "  Cleared $CLEARED cache(s)"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 3: Sync fresh copy from source to ALL profile caches
+# Step 4: Sync fresh copy from source to ALL profile caches
 # ---------------------------------------------------------------------------
-echo "Step 3: Syncing v$VERSION to profile caches..."
+echo "Step 4: Syncing v$VERSION to profile caches..."
 SYNCED=0
 for profile_dir in "$HOME/.claude-profiles"/*/config; do
   [ -d "$profile_dir" ] || continue
@@ -95,17 +141,16 @@ echo "  Synced to $SYNCED profile(s)"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 4: Reinstall via CLI (cache is now clean, marketplace is fresh)
+# Step 5: Reinstall via CLI (cache is clean, marketplace is fresh)
 # ---------------------------------------------------------------------------
-echo "Step 4: CLI reinstall..."
-claude plugin uninstall "$PLUGIN_NAME@$MARKETPLACE" --scope user 2>/dev/null || true
+echo "Step 5: CLI reinstall..."
 claude plugin install "$PLUGIN_NAME@$MARKETPLACE" --scope user 2>&1 || true
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 5: Verify
+# Step 6: Verify
 # ---------------------------------------------------------------------------
-echo "Step 5: Verification..."
+echo "Step 6: Verification..."
 
 ERRORS=0
 
@@ -133,6 +178,25 @@ for profile_dir in "$HOME/.claude-profiles"/*/config; do
     echo "  profile=$PROFILE_NAME cache: v$VERSION OK (commands: $CMDS)"
   else
     echo "  profile=$PROFILE_NAME cache: MISSING"
+    ERRORS=$((ERRORS + 1))
+  fi
+done
+
+# Check no orphan settings entries remain
+for settings_file in \
+  "$HOME/.claude/settings.json" \
+  "$HOME/.claude-profiles"/*/config/settings.json; do
+  [ -f "$settings_file" ] || continue
+  ORPHAN_COUNT=$(python3 -c "
+import json
+with open('$settings_file') as f:
+    s = json.load(f)
+plugins = s.get('enabledPlugins', {})
+orphans = [k for k in plugins if k.startswith('$PLUGIN_NAME@') and k != '$PLUGIN_NAME@$MARKETPLACE']
+print(len(orphans))
+" 2>/dev/null || echo 0)
+  if [ "$ORPHAN_COUNT" -gt 0 ]; then
+    echo "  WARN: $ORPHAN_COUNT orphan entries in $settings_file"
     ERRORS=$((ERRORS + 1))
   fi
 done
