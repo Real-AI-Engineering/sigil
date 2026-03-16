@@ -152,6 +152,60 @@ All artifacts are written to `.signum/` (auto-added to `.gitignore`):
 | `repair_brief.json` | AUDIT | Current repair brief for engineer (v4.6+) |
 | `flaky_tests.json` | AUDIT | Flaky test tracker (v4.6+, run-local) |
 
+## Project Context Bootstrap: /signum init
+
+Before running the main pipeline on an unfamiliar project, use `/signum init` to generate project context files that the Contractor agent reads automatically.
+
+```
+/signum init [--force] [--project-root <path>]
+```
+
+### Pipeline
+
+```
+SCAN → SYNTHESIZE → PRESENT → VERIFY
+```
+
+**SCAN** (deterministic, ~5s): `lib/init-scanner.sh` reads known-location files using Claude's native tools. Signal hierarchy (ranked, not averaged):
+1. `docs/how-it-works.md`, `docs/architecture.md` — authoritative (Goal, Capabilities)
+2. `CLAUDE.md`, `AGENTS.md` — explicit conventions and exclusions (Non-Goals)
+3. `README.md` first 150 lines — fallback goal description
+4. `package.json` / `pyproject.toml` / `Cargo.toml` — tech stack, description (last resort)
+5. `.github/workflows/`, `Makefile`, `justfile` — CI targets (Success Criteria)
+6. `bin/`, `commands/`, `skills/`, `console_scripts` — public entrypoints (Capabilities, Personas)
+7. `git log --dirstat=files --since="6 months ago"` — activity-weighted capabilities
+8. `docs/adr/*.md` (Rejected/Deprecated status) — Non-Goals only (explicit signals)
+
+**Ignore set**: `.git`, `.signum/`, `node_modules/`, `dist/`, `build/`, `.venv/`, `__pycache__/`, `coverage/`, `tests/fixtures/`
+
+**SYNTHESIZE** (LLM, `agents/init-synthesizer.md`): applies precedence, emits `project.intent.md` with per-section evidence comments (`<!-- evidence: ... -->`) and confidence annotations (`<!-- confidence: high|medium|low -->`). Non-Goals are extracted ONLY from explicit negative signals — never inferred from absence.
+
+**PRESENT**: shows drafts for interactive review before writing.
+
+**VERIFY**: reports `Glossary has N terms, M aliases` and `Intent covers: N capabilities, N non-goals`.
+
+### Generated Files
+
+| File | Description |
+|------|-------------|
+| `project.intent.md` | Goal, Core Capabilities, Non-Goals, Success Criteria, Personas |
+| `project.glossary.json` | `canonicalTerms` array + `aliases` object |
+
+### --force Flag
+
+Default: refuses if files exist. `--force` overwrites (use for updates). Existing glossary terms are always preserved on merge — only additions are made.
+
+### Low-Confidence Handling
+
+When a section has sparse or contradictory signals, the synthesizer emits TODO markers instead of fabricating content:
+
+```markdown
+## Non-Goals
+<!-- evidence: none found -->
+<!-- confidence: low -->
+- TODO: No explicit non-goals detected. Review and add manually.
+```
+
 ## Cost Estimates
 
 Approximate per-run costs at standard API rates:

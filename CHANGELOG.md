@@ -1,5 +1,25 @@
 # Changelog
 
+## [4.8.0] - 2026-03-16
+
+### Added
+- `/signum init` command — bootstrap project context (project.intent.md + project.glossary.json) from existing codebase
+  - 4-phase pipeline: SCAN (deterministic) → SYNTHESIZE (LLM) → PRESENT (interactive) → VERIFY
+  - Source precedence hierarchy: docs/ > CLAUDE.md > README.md > package.json
+  - Non-Goals only from explicit negative signals (ADRs, README limitations), never from absence
+  - Per-section evidence comments (`<!-- evidence: ... -->`) and confidence annotations
+  - Glossary merge semantics: never remove existing terms, only add
+  - Git log with 6-month dirstat horizon for sustained activity patterns
+  - Deep docs scan: docs/research/, docs/plans/, docs/adr/
+  - Ignore set: .git, .signum/, node_modules/, dist/, build/, .venv/, __pycache__/, coverage/, tests/fixtures/
+  - `--force` flag to overwrite existing files
+  - Symlink protection on file write
+- `commands/init.md` — command orchestrator
+- `agents/init-synthesizer.md` — LLM synthesis agent (read-only, no Write/Bash tools)
+- `lib/init-scanner.sh` — deterministic signal extraction script
+- `tests/test-init.sh` — 42-test scanner validation suite
+- `docs/how-it-works.md` — init pipeline documentation
+
 ## [4.6.1] - 2026-03-15
 
 ### Changed

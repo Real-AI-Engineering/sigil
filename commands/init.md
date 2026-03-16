@@ -1,0 +1,211 @@
+---
+name: init
+description: Bootstrap project context (project.intent.md and project.glossary.json) from an existing codebase using deterministic scan + LLM synthesis + interactive editing.
+arguments:
+  - name: flags
+    description: "Optional: --force to overwrite existing files, --project-root <path> to specify target directory"
+    required: false
+---
+
+# Signum Init: Project Context Bootstrapping
+
+You are the Signum Init orchestrator. Bootstrap project context for a new or existing project.
+
+The user's arguments: `$ARGUMENTS`
+
+## Pipeline
+
+```
+SCAN → SYNTHESIZE → PRESENT → VERIFY
+```
+
+---
+
+## Step 0: Parse Arguments
+
+Parse `$ARGUMENTS`:
+- If `--force` is present, set FORCE_MODE=true (overwrite existing files without prompting)
+- If `--project-root <path>` is present, use that path. Otherwise use current directory.
+- Any other argument: print usage and stop.
+
+**Usage:**
+```
+/signum init [--force] [--project-root <path>]
+```
+
+---
+
+## Step 1: SCAN (deterministic)
+
+### 1a. Check for existing files
+
+Run:
+```bash
+ls project.intent.md 2>/dev/null && echo "INTENT_EXISTS=true" || echo "INTENT_EXISTS=false"
+ls project.glossary.json 2>/dev/null && echo "GLOSSARY_EXISTS=true" || echo "GLOSSARY_EXISTS=false"
+```
+
+If `project.intent.md` OR `project.glossary.json` already exists AND `--force` was NOT provided:
+- Print this message and STOP:
+  ```
+  project.intent.md already exists.
+
+  To overwrite, run: /signum init --force
+  To update (merge), run: /signum init --force
+  ```
+
+### 1b. Run scanner
+
+```bash
+bash lib/init-scanner.sh --project-root "${PROJECT_ROOT:-.}" 2>/dev/null
+```
+
+Save the output JSON as SCAN_SIGNALS. This contains all signals needed for synthesis.
+
+Report to user:
+```
+SCAN complete. Found signals:
+  - Authoritative docs: [yes/no]
+  - CLAUDE.md: [yes/no]
+  - README.md: [yes/no]
+  - Package manifest: [yes/no]
+  - Git history (6 months): [N commits]
+  - Public entrypoints: [N found]
+  - Existing glossary: [yes/no]
+  - Existing intent: [yes/no]
+```
+
+---
+
+## Step 2: SYNTHESIZE (LLM)
+
+Pass SCAN_SIGNALS to the init-synthesizer agent. The synthesizer will:
+1. Apply source precedence hierarchy (docs/ > CLAUDE.md > README > package.json)
+2. Generate `project.intent.md` with evidence comments and confidence annotations
+3. Generate `project.glossary.json` with canonicalTerms and aliases
+4. Emit coverage summary
+
+**Key rules enforced by synthesizer:**
+- Non-Goals ONLY from explicit negative signals (ADRs rejected, README "Not supported", CLAUDE.md exclusions)
+- Every section annotated with `<!-- evidence: ... -->` and `<!-- confidence: high|medium|low -->`
+- Low confidence → TODO markers, not fabricated content
+- Existing glossary terms preserved (merge-only)
+
+---
+
+## Step 3: PRESENT (interactive)
+
+Show the generated drafts to the user with a separator:
+
+```
+════════════════════════════════════════
+DRAFT: project.intent.md
+════════════════════════════════════════
+[full generated content]
+
+════════════════════════════════════════
+DRAFT: project.glossary.json
+════════════════════════════════════════
+[full generated content]
+
+════════════════════════════════════════
+```
+
+Then ask:
+```
+Review the drafts above.
+
+Options:
+  [1] Accept and write both files
+  [2] Edit intent first, then write
+  [3] Edit glossary first, then write
+  [4] Accept intent only, skip glossary
+  [5] Cancel (write nothing)
+
+Enter choice (1-5):
+```
+
+Wait for user confirmation before writing any file.
+
+If the user chooses to edit (options 2 or 3), open the draft for editing and present the revised version before final write.
+
+On cancel (option 5): print "Cancelled. No files written." and stop.
+
+---
+
+## Step 4: WRITE
+
+After user confirms, write the files using the Write tool (NOT shell heredoc — prevents delimiter injection and symlink following):
+
+For `project.intent.md`:
+- First check: `[ -L project.intent.md ]` — if symlink, refuse and print: "ERROR: project.intent.md is a symlink. Refusing to overwrite for safety."
+- Use the **Write** tool to write the synthesized content to `project.intent.md`
+
+For `project.glossary.json`:
+- First check: `[ -L project.glossary.json ]` — if symlink, refuse and print: "ERROR: project.glossary.json is a symlink. Refusing to overwrite for safety."
+- Use the **Write** tool to write the synthesized JSON to `project.glossary.json`
+
+**Security notes:**
+- NEVER use shell heredoc (`cat << EOF`) to write LLM-generated content — delimiter injection risk
+- NEVER write to symlinks — prevents overwrite outside project root
+- Always use the Write tool which writes atomically to the exact path
+
+Print confirmation:
+```
+Written: project.intent.md
+Written: project.glossary.json
+```
+
+---
+
+## Step 5: VERIFY
+
+Run coverage verification:
+
+```bash
+INTENT_GOALS=$(grep -c "^## Goal" project.intent.md 2>/dev/null || echo 0)
+INTENT_CAPS=$(grep -c "^- " project.intent.md 2>/dev/null || echo 0)
+INTENT_NG=$(grep -c "^## Non-Goals" project.intent.md 2>/dev/null || echo 0)
+
+GLOSSARY_TERMS=$(python3 -c "
+import json
+d = json.load(open('project.glossary.json'))
+terms = len(d.get('canonicalTerms', []))
+aliases = len(d.get('aliases', {}))
+print(f'{terms} terms, {aliases} aliases')
+" 2>/dev/null || echo "0 terms, 0 aliases")
+
+echo "Glossary has ${GLOSSARY_TERMS}"
+echo "Intent covers: ${INTENT_GOALS} goal section, ${INTENT_CAPS} bullet points, ${INTENT_NG} non-goals section"
+```
+
+Print VERIFY summary:
+```
+VERIFY complete:
+  Glossary has N terms, M aliases
+  Intent covers: 1 goal, N capabilities, N non-goals
+
+Next steps:
+  1. Review project.intent.md — edit sections marked TODO
+  2. Commit both files to your repository
+  3. Contractor will now use project context automatically
+```
+
+---
+
+## Error Handling
+
+- If scanner fails: print error and stop (do not proceed to synthesize)
+- If synthesis produces empty Goal: warn user, proceed with TODO placeholder
+- If jq/python3 unavailable: skip verification step, still write files
+- If project has no signals at all (no README, no manifest, no git): warn and emit minimal template with TODO markers throughout
+
+---
+
+## Notes
+
+- Files are written to project root (not `.signum/`)
+- `--force` overwrites without prompting — use when updating existing intent
+- The synthesizer never writes files — this command writes after user confirms
+- Evidence comments (`<!-- evidence: ... -->`) are HTML comments, invisible in rendered markdown
+- Low-confidence sections have TODO markers to guide manual editing
