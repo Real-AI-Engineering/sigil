@@ -119,10 +119,11 @@ Read these files:
 
 ### Repair process
 
-1. Read the repair brief. It contains deterministic failures (mechanic regressions, holdout categories) and review findings (fingerprint, severity, file, line, evidence).
-2. Fix ONLY the listed issues. Do not refactor, do not add features, do not touch unrelated code.
-3. After fixing, re-run the visible AC verify commands to confirm existing behavior is preserved.
-4. Generate `.signum/combined.patch` via `git diff` and write `.signum/execute_log.json`.
+1. Read the repair brief. It contains deterministic failures (mechanic regressions, holdout categories), review findings (fingerprint, severity, file, line, evidence), and typed mechanic findings (per-file entries with check_id, category, file, line, code, message, origin).
+2. If `mechanicFindings` is present and non-empty, treat each entry as an additional repair target alongside `reviewFindings`. Each mechanic finding identifies the exact file, line, and error code to fix.
+3. Fix ONLY the listed issues. Do not refactor, do not add features, do not touch unrelated code.
+4. After fixing, re-run the visible AC verify commands to confirm existing behavior is preserved.
+5. Generate `.signum/combined.patch` via `git diff` and write `.signum/execute_log.json`.
 
 ### Repair constraints
 

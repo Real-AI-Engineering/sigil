@@ -1485,108 +1485,26 @@ If output contains `AUTO_BLOCK`, **STOP**. Invariant regressions are critical fa
 Run full project checks and compare with baseline. Use the Bash tool:
 
 ```bash
-# Lint
-if [ -f "pyproject.toml" ] && grep -q "ruff" pyproject.toml 2>/dev/null; then
-  LINT_OUT=$(ruff check . 2>&1); LINT_EXIT=$?
-elif [ -f "package.json" ] && grep -q "eslint" package.json 2>/dev/null; then
-  LINT_OUT=$(npx eslint . 2>&1); LINT_EXIT=$?
-else
-  LINT_OUT="no linter found, skipped"; LINT_EXIT=0
+# Resolve mechanic-parser.sh from known trusted Signum install roots only.
+# SIGNUM_PLUGIN_DIR env var is intentionally excluded to prevent environment
+# hijacking — only fixed install paths are trusted.
+# Home directory is resolved from the account database, not $HOME, to prevent
+# environment-variable override attacks.
+_REAL_HOME=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || python3 -c "import pwd,os; print(pwd.getpwuid(os.getuid()).pw_dir)" 2>/dev/null || echo "$HOME")
+_SIGNUM_MECHANIC=""
+for _d in \
+  "${_REAL_HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/mechanic-parser.sh" ] || continue
+  _SIGNUM_MECHANIC="${_d}/lib/mechanic-parser.sh"
+  break
+done
+if [ -z "$_SIGNUM_MECHANIC" ]; then
+  echo "ERROR: mechanic-parser.sh not found in Signum plugin directories" >&2
+  exit 1
 fi
-
-# Typecheck
-if [ -f "pyproject.toml" ] && grep -q "mypy" pyproject.toml 2>/dev/null; then
-  TYPE_OUT=$(mypy . 2>&1); TYPE_EXIT=$?
-elif [ -f "tsconfig.json" ]; then
-  TYPE_OUT=$(npx tsc --noEmit 2>&1); TYPE_EXIT=$?
-else
-  TYPE_OUT="no typecheck found, skipped"; TYPE_EXIT=0
-fi
-
-# Read baseline
-BL_LINT=$(jq -r '.lint' .signum/baseline.json)
-BL_TYPE=$(jq -r '.typecheck' .signum/baseline.json)
-BL_TEST=$(jq -r '.tests.exit_code // .tests' .signum/baseline.json)
-BL_TEST_FAILING=$(jq -c '.tests.failing // []' .signum/baseline.json)
-
-# Tests — capture per-test names for regression detection
-if [ -f "pyproject.toml" ] && grep -q "pytest" pyproject.toml 2>/dev/null; then
-  TEST_OUT=$(pytest --tb=short -q 2>&1); TEST_EXIT=$?
-  TEST_FAILING=$(echo "$TEST_OUT" | grep -E '^FAILED ' | sed 's/^FAILED //' | sed 's/ - .*//' | jq -R . | jq -s .)
-  [ -z "$TEST_FAILING" ] && TEST_FAILING='[]'
-  NEW_FAILURES=$(jq -n --argjson curr "$TEST_FAILING" --argjson base "$BL_TEST_FAILING" \
-    '[$curr[] | select(. as $t | $base | index($t) | not)]')
-
-  # Flaky test retry: for each new failure, run it twice more; mixed results → flaky
-  FLAKY_TESTS='[]'
-  CONFIRMED_FAILURES='[]'
-  if [ "$(echo "$NEW_FAILURES" | jq 'length')" -gt 0 ]; then
-    while IFS= read -r TEST_NAME; do
-      R1=$(pytest "$TEST_NAME" --tb=no -q 2>&1; echo "EXIT:$?")
-      R2=$(pytest "$TEST_NAME" --tb=no -q 2>&1; echo "EXIT:$?")
-      E1=$(echo "$R1" | grep "EXIT:" | sed 's/EXIT://')
-      E2=$(echo "$R2" | grep "EXIT:" | sed 's/EXIT://')
-      if [ "$E1" != "$E2" ] || ([ "$E1" = "0" ] && [ "$E2" = "0" ]); then
-        # Mixed results or both pass on retry → flaky
-        FLAKY_TESTS=$(echo "$FLAKY_TESTS" | jq --arg t "$TEST_NAME" '. + [$t]')
-      else
-        # Consistently failing → confirmed failure
-        CONFIRMED_FAILURES=$(echo "$CONFIRMED_FAILURES" | jq --arg t "$TEST_NAME" '. + [$t]')
-      fi
-    done < <(echo "$NEW_FAILURES" | jq -r '.[]')
-    NEW_FAILURES="$CONFIRMED_FAILURES"
-  fi
-
-  # Persist flaky tests
-  jq -n --argjson flaky "$FLAKY_TESTS" \
-    '{"detectedAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'", "flakyTests": $flaky}' \
-    > .signum/flaky_tests.json
-  if [ "$(echo "$FLAKY_TESTS" | jq 'length')" -gt 0 ]; then
-    echo "Flaky tests detected (removed from NEW_FAILURES): $(echo "$FLAKY_TESTS" | jq -r '.[]' | tr '\n' ' ')"
-  fi
-elif [ -f "package.json" ] && grep -q '"test"' package.json 2>/dev/null; then
-  TEST_OUT=$(npm test 2>&1); TEST_EXIT=$?
-  TEST_FAILING='[]'
-  NEW_FAILURES='[]'
-elif [ -f "Cargo.toml" ]; then
-  TEST_OUT=$(cargo test 2>&1); TEST_EXIT=$?
-  TEST_FAILING='[]'
-  NEW_FAILURES='[]'
-else
-  TEST_OUT="no test runner found, skipped"; TEST_EXIT=0
-  TEST_FAILING='[]'
-  NEW_FAILURES='[]'
-fi
-
-# Write mechanic report with regression detection
-jq -n \
-  --arg lint_status "$([ $LINT_EXIT -eq 0 ] && echo pass || echo fail)" \
-  --argjson lint_exit "$LINT_EXIT" \
-  --arg type_status "$([ $TYPE_EXIT -eq 0 ] && echo pass || echo fail)" \
-  --argjson type_exit "$TYPE_EXIT" \
-  --arg test_status "$([ $TEST_EXIT -eq 0 ] && echo pass || echo fail)" \
-  --argjson test_exit "$TEST_EXIT" \
-  --argjson bl_lint "$BL_LINT" \
-  --argjson bl_type "$BL_TYPE" \
-  --argjson bl_test "$BL_TEST" \
-  --argjson new_failures "$NEW_FAILURES" \
-  --argjson test_failing "$TEST_FAILING" \
-  '{
-    lint:      { status: $lint_status, exitCode: $lint_exit, baseline: $bl_lint,
-                 regression: (if $bl_lint == 0 and $lint_exit != 0 then true else false end) },
-    typecheck: { status: $type_status, exitCode: $type_exit, baseline: $bl_type,
-                 regression: (if $bl_type == 0 and $type_exit != 0 then true else false end) },
-    tests:     { status: $test_status, exitCode: $test_exit, baseline: $bl_test,
-                 failing: $test_failing, newFailures: $new_failures,
-                 regression: (if ($new_failures | length) > 0 then true
-                              elif $bl_test == 0 and $test_exit != 0 then true
-                              else false end) },
-    hasRegressions: (if ($new_failures | length) > 0 or
-                        ($bl_lint == 0 and $lint_exit != 0) or
-                        ($bl_type == 0 and $type_exit != 0) then true else false end)
-  }' > .signum/mechanic_report.json
-
-echo "Mechanic done. Lint=$LINT_EXIT(bl:$BL_LINT) Typecheck=$TYPE_EXIT(bl:$BL_TYPE) Tests=$TEST_EXIT(bl:$BL_TEST)"
+bash "$_SIGNUM_MECHANIC" .signum/baseline.json
 ```
 
 If any check has a NEW regression, continue to reviews — mechanic regression influences the final decision but does not block the audit.
@@ -2103,8 +2021,9 @@ if [ -f .signum/holdout_report.json ]; then
   fi
 fi
 
-# Build mechanic regression summary
+# Build mechanic regression summary and typed findings
 MECH_SUMMARY=""
+MECH_FINDINGS='[]'
 MECH_REG=$(jq -r '.hasRegressions' .signum/mechanic_report.json)
 if [ "$MECH_REG" = "true" ]; then
   MECH_SUMMARY=$(jq -r '
@@ -2112,6 +2031,33 @@ if [ "$MECH_REG" = "true" ]; then
      if .typecheck.regression then "typecheck regression" else empty end,
      if .tests.regression then "test regression (" + (.tests.newFailures | length | tostring) + " new failures)" else empty end
     ] | join(", ")' .signum/mechanic_report.json)
+  # Extract typed per-file findings from regression checks only
+  MECH_FINDINGS=$(jq '[
+    .findings[]? |
+    . as $f |
+    (.check_id) as $cid |
+    # Find the check entry to get category and regression flag
+    ([ (if . then . else null end) ] | first) as $_ |
+    $f
+  ] | if length == 0 then [] else . end' .signum/mechanic_report.json 2>/dev/null || echo '[]')
+  # Filter to only regression checks
+  REGRESSION_IDS=$(jq -r '[.checks[]? | select(.regression == true) | .id] | join(" ")' .signum/mechanic_report.json 2>/dev/null || echo "")
+  if [ -n "$REGRESSION_IDS" ]; then
+    MECH_FINDINGS=$(jq '
+      (.checks // [] | map({(.id): .category}) | add // {}) as $cat_map |
+      (.checks // [] | [.[] | select(.regression == true) | .id]) as $reg_ids |
+      [.findings[]? | select(.check_id as $cid | $reg_ids | index($cid) != null) |
+        # Normalize file path: reject absolute paths and path traversal attempts
+        . as $entry |
+        ($entry.file // "") as $raw_file |
+        (if ($raw_file | startswith("/")) or ($raw_file | test("(^|/)\\.\\.(/|$)"))
+         then ""
+         else $raw_file end) as $safe_file |
+        {check_id: $entry.check_id, category: ($cat_map[$entry.check_id] // "unknown"), file: $safe_file, line: $entry.line, column: $entry.column, code: $entry.code, message: $entry.message, origin: $entry.origin}]' \
+      .signum/mechanic_report.json 2>/dev/null || echo '[]')
+  else
+    MECH_FINDINGS='[]'
+  fi
 fi
 
 jq -n \
@@ -2119,6 +2065,7 @@ jq -n \
   --argjson findings "$FINDINGS" \
   --arg holdout_summary "$HOLDOUT_SUMMARY" \
   --arg mechanic_summary "$MECH_SUMMARY" \
+  --argjson mechanic_findings "$MECH_FINDINGS" \
   '{
     iteration: $iteration,
     deterministicFailures: {
@@ -2126,6 +2073,7 @@ jq -n \
       holdout: (if $holdout_summary != "" then $holdout_summary else null end)
     },
     reviewFindings: $findings,
+    mechanicFindings: (if ($mechanic_findings | length) > 0 then $mechanic_findings else [] end),
     constraints: [
       "Fix ONLY the listed findings",
       "Minimal diff — no unrelated refactors",
@@ -2134,7 +2082,7 @@ jq -n \
     ]
   }' > .signum/repair_brief.json
 
-echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.json) findings"
+echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.json) findings, $(jq '.mechanicFindings | length' .signum/repair_brief.json) mechanic findings"
 ```
 
 **Clear stale engineer artifacts before launching repair:**
