@@ -1992,7 +1992,7 @@ HAS_MAJOR=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR" or .severi
 HAS_REGRESSIONS=$(jq -r '.mechanic' .signum/audit_summary.json | grep -q "regression" && echo "true" || echo "false")
 HOLDOUT_FAILURES=$(jq -r '.holdout.failed // 0' .signum/audit_summary.json)
 
-# Compute iteration score from audit_summary findings (synthesizer only emits iterationScore in iterative mode)
+# Compute iteration score from audit_summary findings (synthesizer emits the score field in iterative mode)
 _CRITICALS=$(jq '[.reviews[].findings[]? | select(.severity == "CRITICAL")] | length' .signum/audit_summary.json)
 _MAJORS=$(jq '[.reviews[].findings[]? | select(.severity == "MAJOR")] | length' .signum/audit_summary.json)
 _MINORS=$(jq '[.reviews[].findings[]? | select(.severity == "MINOR")] | length' .signum/audit_summary.json)
@@ -2188,21 +2188,152 @@ echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.j
 **Clear stale engineer artifacts before launching repair:**
 
 ```bash
+# Save current best combined.patch for worktree seeding BEFORE deleting stale artifacts
+_SEED_PATCH=""
+if [ -f .signum/combined.patch ]; then
+  _SEED_PATCH=$(mktemp /tmp/signum_seed_XXXXXX.patch)
+  cp .signum/combined.patch "$_SEED_PATCH"
+fi
+
 # Remove stale artifacts so the success gate cannot accept leftovers from prior iterations
 rm -f .signum/execute_log.json .signum/combined.patch .signum/iteration_delta.patch
 ```
 
-**Launch repair engineer:**
+**Launch repair engineer (parallel lanes):**
 
-Use the Agent tool to launch the "engineer" agent with this prompt:
+Set up two isolated git worktrees and run both engineers in parallel. The two strategies are:
+
+- **Lane A**: Fix with minimal targeted changes. Patch only the specific lines flagged in findings.
+- **Lane B**: Fix by addressing the root cause. May touch more files if the findings share a common underlying issue.
+
+If worktree creation fails for either lane, fall back to single-lane behavior (the original single-engineer dispatch) without aborting the iteration.
+
+Each lane works in an isolated git worktree seeded from `base_commit` + current best `combined.patch`. Worktree paths live under `.signum/iterations/NN/lanes/` (one subdirectory per lane).
+
+```bash
+ITER_PAD=$(printf '%02d' $ITER_NUM)
+BASE_COMMIT=$(jq -r '.base_commit' .signum/execution_context.json)
+LANE_PATHS=( ".signum/iterations/$ITER_PAD/lanes/A" ".signum/iterations/$ITER_PAD/lanes/B" )
+mkdir -p "${LANE_PATHS[0]}" "${LANE_PATHS[1]}"
+
+# _prune_lanes: remove both worktrees; safe to call multiple times
+_prune_lanes() {
+  for _lp in "${LANE_PATHS[@]}"; do git worktree remove --force "$_lp" 2>/dev/null || true; done
+}
+
+# Trap ensures cleanup on exit even if the iteration is interrupted
+_LANE_CLEANUP_DONE=false
+trap 'if [ "$_LANE_CLEANUP_DONE" = "false" ]; then _prune_lanes; _LANE_CLEANUP_DONE=true; fi' EXIT
+
+# Try to create both worktrees; if either fails, set WORKTREE_OK=false for fallback to single-lane
+WORKTREE_OK=true
+for _lp in "${LANE_PATHS[@]}"; do
+  if [ "$WORKTREE_OK" = "true" ] && ! git worktree add "$_lp" "$BASE_COMMIT" 2>/dev/null; then
+    echo "LANE_FALLBACK: worktree creation failed for $_lp — falling back to single-lane"
+    _prune_lanes
+    WORKTREE_OK=false
+  fi
+done
+
+# Apply current best combined.patch to each worktree to seed from current best state
+if [ "$WORKTREE_OK" = "true" ] && [ -n "$_SEED_PATCH" ] && [ -f "$_SEED_PATCH" ]; then
+  for _lp in "${LANE_PATHS[@]}"; do
+    git -C "$_lp" apply --index "$_SEED_PATCH" 2>/dev/null || true
+  done
+  rm -f "$_SEED_PATCH"
+fi
+```
+
+If `WORKTREE_OK` is `false`, fall back to single-lane: use the Agent tool to launch the "engineer" agent with the original prompt (no strategy hint), writing `.signum/combined.patch` and `.signum/execute_log.json` as before — then skip ahead to "After engineer completes, validate execute success".
+
+If `WORKTREE_OK` is `true`, launch both lane engineers in parallel using the Agent tool.
+
+For the engineer working in `${LANE_PATHS[0]}`, use this prompt (strategy: minimal targeted changes):
 
 ```
+STRATEGY HINT: Fix with minimal targeted changes. Patch only the specific lines flagged in findings.
 Read .signum/contract-engineer.json for scope and acceptance criteria.
 Read .signum/baseline.json for pre-existing check state.
 Read .signum/repair_brief.json for the specific issues to fix.
 Fix ONLY the issues listed in the repair brief. Do not refactor, do not add features.
 After fixing, run the visible AC verifies to confirm you didn't break them.
-Write .signum/combined.patch and .signum/execute_log.json.
+Write ${LANE_PATHS[0]}/combined.patch and ${LANE_PATHS[0]}/execute_log.json.
+IMPORTANT: Work in ${LANE_PATHS[0]}
+```
+
+For the engineer working in `${LANE_PATHS[1]}`, use this prompt (strategy: root cause):
+
+```
+STRATEGY HINT: Fix by addressing the root cause. May touch more files if the findings share a common underlying issue.
+Read .signum/contract-engineer.json for scope and acceptance criteria.
+Read .signum/baseline.json for pre-existing check state.
+Read .signum/repair_brief.json for the specific issues to fix.
+Fix ONLY the issues listed in the repair brief. Do not refactor, do not add features.
+After fixing, run the visible AC verifies to confirm you didn't break them.
+Write ${LANE_PATHS[1]}/combined.patch and ${LANE_PATHS[1]}/execute_log.json.
+IMPORTANT: Work in ${LANE_PATHS[1]}
+```
+
+After both engineers complete, run mechanic (`lib/mechanic-parser.sh`) and holdout validation independently for each lane, writing results to `${LANE_PATHS[0]}/mechanic_report.json`, `${LANE_PATHS[0]}/holdout_report.json`, `${LANE_PATHS[1]}/mechanic_report.json`, and `${LANE_PATHS[1]}/holdout_report.json`.
+
+**Select winner by iteration score:**
+
+Compute the iteration score for each lane using the existing formula: `-(CRITICALS*1000) - (MECH_REGRESSIONS*500) - (HOLDOUT_FAILURES*200) - (MAJORS*50) - (MINORS*1)`. The lane with the higher score wins. On a tie, the minimal-changes lane (A) is preferred.
+
+```bash
+_lane_score() {
+  local lane_dir="$1"
+  local mech_reg holdout_fail
+  mech_reg=$(jq 'if .hasRegressions then 1 else 0 end' "$lane_dir/mechanic_report.json" 2>/dev/null || echo 0)
+  holdout_fail=$(jq '.failed // 0' "$lane_dir/holdout_report.json" 2>/dev/null || echo 0)
+  echo $(( -(mech_reg*500) - (holdout_fail*200) ))
+}
+
+SCORE_A=$(_lane_score "${LANE_PATHS[0]}")
+SCORE_B=$(_lane_score "${LANE_PATHS[1]}")
+LANE_SELECTED_DIR=".signum/iterations/$ITER_PAD/lanes"
+
+if [ "$SCORE_A" -ge "$SCORE_B" ]; then
+  WINNER_LANE="A"; RUNNER_UP_LANE="B"
+  WINNER_SCORE=$SCORE_A; RUNNER_UP_SCORE=$SCORE_B
+  WINNER_REASON="score_a=$SCORE_A >= score_b=$SCORE_B; minimal-changes preferred on tie"
+else
+  WINNER_LANE="B"; RUNNER_UP_LANE="A"
+  WINNER_SCORE=$SCORE_B; RUNNER_UP_SCORE=$SCORE_A
+  WINNER_REASON="score_b=$SCORE_B > score_a=$SCORE_A"
+fi
+
+jq -n \
+  --arg winner "$WINNER_LANE" \
+  --arg runner_up "$RUNNER_UP_LANE" \
+  --argjson winner_score "$WINNER_SCORE" \
+  --argjson runner_up_score "$RUNNER_UP_SCORE" \
+  --arg reason "$WINNER_REASON" \
+  '{winner: $winner, runner_up: $runner_up, winner_score: $winner_score, runner_up_score: $runner_up_score, reason: $reason}' \
+  > "$LANE_SELECTED_DIR/selected_lane.json"
+
+echo "Winner: lane $WINNER_LANE (score $WINNER_SCORE); loser: lane $RUNNER_UP_LANE (score $RUNNER_UP_SCORE)"
+```
+
+**Run full review panel (Claude + Codex + Gemini) on winner only.**
+
+If the winner receives a MAJOR or CRITICAL finding after the panel, also send the runner-up lane through the full review panel before declaring the iteration result. After the runner-up panel completes, re-score; if it now beats the winner, promote the runner-up and update the lane selection record.
+
+**Copy winner artifacts to iteration root:**
+
+```bash
+if [ "$WINNER_LANE" = "A" ]; then WINNER_DIR="${LANE_PATHS[0]}"; else WINNER_DIR="${LANE_PATHS[1]}"; fi
+cp "$WINNER_DIR/combined.patch" .signum/combined.patch
+cp "$WINNER_DIR/execute_log.json" .signum/execute_log.json 2>/dev/null || true
+cp "$WINNER_DIR/mechanic_report.json" .signum/mechanic_report.json 2>/dev/null || true
+cp "$WINNER_DIR/holdout_report.json" .signum/holdout_report.json 2>/dev/null || true
+mkdir -p .signum/reviews
+cp "$WINNER_DIR/reviews/"*.json .signum/reviews/ 2>/dev/null || true
+cp "$WINNER_DIR/audit_summary.json" .signum/audit_summary.json 2>/dev/null || true
+
+# Clean up worktrees now that winner artifacts are copied
+_prune_lanes
+_LANE_CLEANUP_DONE=true
 ```
 
 **After engineer completes, validate execute success before re-running audit:**
