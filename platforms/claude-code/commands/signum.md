@@ -115,7 +115,8 @@ rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json"
       "${DIR}contract-hash.txt" "${DIR}execution_context.json" \
       "${DIR}review_prompt_codex.txt" "${DIR}review_prompt_gemini.txt" \
       "${DIR}intent_check.json" \
-      "${DIR}audit_iteration_log.json" "${DIR}repair_brief.json" "${DIR}flaky_tests.json" 2>/dev/null || true
+      "${DIR}audit_iteration_log.json" "${DIR}repair_brief.json" "${DIR}flaky_tests.json" \
+      "${DIR}policy_scan.json" 2>/dev/null || true
 
 # Update status in index.json
 update_contract_status "$CONTRACT_ID" "archived"

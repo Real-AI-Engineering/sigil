@@ -4,7 +4,7 @@
 # Usage: policy-scanner.sh <patch_file>
 # Output: .signum/policy_scan.json
 # Exit 0: scan complete (findings may be empty)
-# Exit 1: fatal error (missing tools, missing patch file)
+# Exit 1: fatal error (missing tools, missing patch file — writes JSON error + exits non-zero)
 
 set -euo pipefail
 
@@ -45,15 +45,15 @@ new_line=0
 
 while IFS= read -r raw_line; do
   # Detect file header: diff --git a/foo b/foo
-  if echo "$raw_line" | grep -qE '^diff --git '; then
-    current_file=$(echo "$raw_line" | sed 's|^diff --git a/||; s| b/.*||')
+  if printf '%s\n' "$raw_line" | grep -qE '^diff --git '; then
+    current_file=$(printf '%s\n' "$raw_line" | sed 's|^diff --git a/||; s| b/.*||')
     new_line=0
     continue
   fi
 
   # Hunk header: @@ -old_start,old_count +new_start,new_count @@
-  if echo "$raw_line" | grep -qE '^@@ '; then
-    new_start=$(echo "$raw_line" | sed -n 's/^@@ -[0-9]*\(,[0-9]*\)\? +\([0-9]*\)\(,[0-9]*\)\? @@.*/\2/p')
+  if printf '%s\n' "$raw_line" | grep -qE '^@@ '; then
+    new_start=$(printf '%s\n' "$raw_line" | sed -n 's/^@@ -[0-9]*\(,[0-9]*\)\? +\([0-9]*\)\(,[0-9]*\)\? @@.*/\2/p')
     if [ -n "$new_start" ]; then
       new_line=$((new_start - 1))
     fi
@@ -61,23 +61,23 @@ while IFS= read -r raw_line; do
   fi
 
   # Skip index/--- /+++ headers
-  if echo "$raw_line" | grep -qE '^(index |--- |\+\+\+ |Binary files)'; then
+  if printf '%s\n' "$raw_line" | grep -qE '^(index |--- |\+\+\+ |Binary files)'; then
     continue
   fi
 
   # Context line: increment new_line counter
-  if echo "$raw_line" | grep -qE '^ '; then
+  if printf '%s\n' "$raw_line" | grep -qE '^ '; then
     new_line=$((new_line + 1))
     continue
   fi
 
   # Deletion line: do NOT increment new_line counter (deleted lines don't exist in new file)
-  if echo "$raw_line" | grep -qE '^-'; then
+  if printf '%s\n' "$raw_line" | grep -qE '^-'; then
     continue
   fi
 
   # Addition line: record it
-  if echo "$raw_line" | grep -qE '^\+'; then
+  if printf '%s\n' "$raw_line" | grep -qE '^\+'; then
     new_line=$((new_line + 1))
     content="${raw_line:1}"  # strip leading '+'
     # Write: file TAB line TAB content
