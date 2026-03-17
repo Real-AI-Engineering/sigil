@@ -1,5 +1,51 @@
 # Changelog
 
+## [4.9.0] - 2026-03-17
+
+### Added
+- **Policy scanner** (Step 3.1.3) — deterministic bash/grep scan on combined.patch for security sinks, unsafe patterns, and dependency changes. Zero LLM cost. CRITICAL findings trigger AUTO_BLOCK.
+  - `lib/policy-scanner.sh` — 12 curated patterns (eval, subprocess, XSS, SQL injection, weak crypto, TODO/FIXME, debug statements, npm/cargo/pyproject/go.mod deps)
+  - Manifest-only dependency filtering (3/3 arbiter consensus)
+  - Fail-closed on missing patch (exit 1 + JSON error)
+  - `checks.policy_scan` envelope in proofpack.json
+- **Dynamic strategy injection** — Contractor classifies task type (bugfix/feature/refactor/security) via keyword scan, generates `implementationStrategy` in contract.json. Engineer reads as process guide.
+  - Priority: security > bugfix > refactor > feature
+  - `lib/schemas/contract.schema.json` updated with optional `implementationStrategy` field
+- **Context retrieval** (Step 3.2.0) — pre-review step gathers git history (last commit per file), issue refs (ID + title), and project.intent.md. Injected into Claude reviewer only — Codex/Gemini remain adversarially isolated.
+  - `{review_context}` variable in `lib/prompts/review-template.md`
+- **Parallel repair lanes** (Step 3.6.2) — 2 parallel Engineers in git worktrees with different strategies (minimal fix vs root-cause). Mechanic+holdout on both, full review on winner only. Runner-up reviewed if winner gets MAJOR+.
+  - Lane artifacts in `.signum/iterations/NN/lanes/A|B/`
+  - `selected_lane.json` for audit trail
+  - Trap-based worktree cleanup, fallback to single-lane on failure
+- **Typed diagnostics** — extracted mechanic logic into `lib/mechanic-parser.sh` with hybrid output format: summary per check always + per-file findings when runner supports structured output.
+  - 8 runners: pytest, npm test, cargo test, go test, ruff, eslint, mypy, tsc
+  - `origin` field: "structured", "stable_text", "none"
+  - `mechanicFindings` array in repair_brief.json for Engineer
+
+### Changed
+- **Contract approval UX** — replaced fragmented bash echo blocks with markdown-first display. Goal never truncated, compact table, grouped warnings.
+- Policy scanner archive cleanup: `policy_scan.json` included in archive purge list
+
+## [4.8.0] - 2026-03-16
+
+### Added
+- `/signum init` command — bootstrap project context (project.intent.md + project.glossary.json) from existing codebase
+  - 4-phase pipeline: SCAN (deterministic) → SYNTHESIZE (LLM) → PRESENT (interactive) → VERIFY
+  - Source precedence hierarchy: docs/ > CLAUDE.md > README.md > package.json
+  - Non-Goals only from explicit negative signals (ADRs, README limitations), never from absence
+  - Per-section evidence comments (`<!-- evidence: ... -->`) and confidence annotations
+  - Glossary merge semantics: never remove existing terms, only add
+  - Git log with 6-month dirstat horizon for sustained activity patterns
+  - Deep docs scan: docs/research/, docs/plans/, docs/adr/
+  - Ignore set: .git, .signum/, node_modules/, dist/, build/, .venv/, __pycache__/, coverage/, tests/fixtures/
+  - `--force` flag to overwrite existing files
+  - Symlink protection on file write
+- `commands/init.md` — command orchestrator
+- `agents/init-synthesizer.md` — LLM synthesis agent (read-only, no Write/Bash tools)
+- `lib/init-scanner.sh` — deterministic signal extraction script
+- `tests/test-init.sh` — 42-test scanner validation suite
+- `docs/how-it-works.md` — init pipeline documentation
+
 ## [4.6.1] - 2026-03-15
 
 ### Changed
