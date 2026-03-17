@@ -325,6 +325,15 @@
         "summary": { "type": "string" }
       },
       "description": "Computed gate: go = contract is ready for execution, no-go = requires revision or escalation"
+    },
+    "implementationStrategy": {
+      "type": "object",
+      "required": ["taskType", "guidance"],
+      "properties": {
+        "taskType": { "type": "string", "enum": ["bugfix", "feature", "refactor", "security"] },
+        "guidance": { "type": "string", "minLength": 1 }
+      },
+      "description": "Task-type-specific process guidance for the Engineer; optional, informational only"
     }
   }
 }

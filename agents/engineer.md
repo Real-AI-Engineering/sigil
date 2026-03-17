@@ -44,6 +44,7 @@ Read `.signum/contract-engineer.json`. Extract:
 - `inScope` -- which files/directories to touch
 - `acceptanceCriteria` -- what success looks like (with verify commands)
 - `assumptions` -- what's assumed about the codebase
+- `implementationStrategy` -- if present, read it and follow it as a process guide for how to approach implementation. This is separate from `acceptanceCriteria` (which defines what to achieve) and is informational only -- its absence does not block the pipeline.
 
 ### Step 2: Read baseline
 

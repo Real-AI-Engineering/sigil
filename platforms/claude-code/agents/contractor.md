@@ -95,6 +95,25 @@ You receive:
    - Set `readinessForPlanning.summary` to a one-sentence explanation of the verdict.
    Write both fields to the contract output.
 
+3.7. **Classify task type and emit implementationStrategy** (deterministic, keyword-based):
+
+   Scan the `goal` string (case-insensitive). Apply priority order: security > bugfix > refactor > feature (default).
+
+   - **security**: goal contains any of: auth, token, secret, password, credential, permission, jwt, oauth, ssl, tls, crypto, xss, injection, vuln
+   - **bugfix**: goal contains any of: fix, bug, broken, crash, regression
+   - **refactor**: goal contains any of: refactor, rename, restructure, decouple, extract, inline, migrate
+   - **feature**: default when none of the above keywords match
+
+   Map `taskType` to the canonical `guidance` string:
+   - `bugfix` → `"reproduce bug with a test first, then fix"`
+   - `feature` → `"implement incrementally, verify each AC as you go"`
+   - `refactor` → `"verify public API unchanged before and after"`
+   - `security` → `"find all occurrences of the vulnerable pattern, not just the reported one"`
+
+   Set `implementationStrategy` = `{ "taskType": "<type>", "guidance": "<canonical string>" }`.
+
+   This field is informational — it does not block the pipeline. Emit it regardless of risk level.
+
 4. **Generate contract.json** with:
    - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
    - `status`: always set to `"draft"` when generating a new contract
@@ -128,6 +147,7 @@ You receive:
    - contextInheritance (projectRef, projectIntentSha256, contextSnapshotHash, staleIfChanged, stalenessStatus, stalenessPolicy — set in step 3.5)
    - `ambiguityCandidates`, `contradictionsFound`, `clarificationDecisions`, `assumptionProvenance` — typed structured arrays from critique passes (step 3.6); omit for low-risk contracts
    - `readinessForPlanning` — object with `verdict` (`"go"` or `"no-go"`) and `summary`; omit for low-risk contracts
+   - `implementationStrategy` — object with `taskType` and `guidance` from step 3.7 (always include)
 5. **Detect lineage** (if `.signum/contracts/index.json` exists):
    - Read completed/archived contracts from index.json
    - For each, check if their inScope files overlap with the new contract's inScope
