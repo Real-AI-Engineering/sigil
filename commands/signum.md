@@ -932,122 +932,78 @@ Clover failure is informational — it does not block the pipeline. Display warn
 
 ### Step 1.4: Display contract summary
 
-Use the Bash tool to extract and display:
+**Data collection:** Use a single Bash call to extract all values into shell variables:
 
 ```bash
-jq -r '"Goal: " + .goal,
-       "Risk: " + .riskLevel,
-       "In scope: " + (.inScope | join(", ")),
-       "Acceptance criteria: " + (.acceptanceCriteria | length | tostring) + " defined",
-       "Holdout scenarios: " + ((.holdoutScenarios // []) | length | tostring) + " defined"' \
-  .signum/contract.json
+CONTRACT_ID=$(jq -r '.contractId' .signum/contract.json)
+GOAL=$(jq -r '.goal' .signum/contract.json)
+RISK=$(jq -r '.riskLevel' .signum/contract.json)
+INSCOPE=$(jq -r '.inScope | join(", ")' .signum/contract.json)
+AC_COUNT=$(jq '.acceptanceCriteria | length' .signum/contract.json)
+HOLDOUT_COUNT=$(jq '((.holdoutScenarios // []) | length) + ([.acceptanceCriteria[] | select(.visibility == "holdout")] | length)' .signum/contract.json)
+VISIBLE_AC=$((AC_COUNT - $(jq '[.acceptanceCriteria[] | select(.visibility == "holdout")] | length' .signum/contract.json)))
+SPEC_TOTAL=$(jq -r '.total // "?"' .signum/spec_quality.json 2>/dev/null || echo "?")
+SPEC_GRADE=$(jq -r '.grade // "?"' .signum/spec_quality.json 2>/dev/null || echo "?")
+CLOVER=$(jq -r 'if .pass then "PASS (" + (.confidence | tostring) + ")" else "WARN (" + (.confidence | tostring) + ")" end' .signum/clover_report.json 2>/dev/null || echo "skipped")
+INTENT=$(jq -r 'if .aligned then "aligned" elif .aligned == false then "MISALIGNED" else "skipped" end' .signum/intent_check.json 2>/dev/null || echo "skipped")
+RISK_SIGNALS=$(jq -r 'if .riskLevel == "high" then (.riskSignals // [] | join(", ")) else "" end' .signum/contract.json)
+READINESS=$(jq -r '.readinessForPlanning.verdict // "absent"' .signum/contract.json)
 
-QUALITY=$(jq -r '"Spec quality: " + (.total | tostring) + "/115 (grade " + .grade + ")"' \
-  .signum/spec_quality.json 2>/dev/null || echo "Spec quality: not computed")
-echo "$QUALITY"
-
-# Show spec validation findings if available
-if [ -f .signum/spec_validation.json ]; then
-  CODEX_AVAIL=$(jq -r '.codex.available' .signum/spec_validation.json)
-  GEMINI_AVAIL=$(jq -r '.gemini.available' .signum/spec_validation.json)
-  if [ "$CODEX_AVAIL" = "true" ]; then
-    echo ""
-    echo "--- Codex spec review (ambiguities + assumptions) ---"
-    jq -r '.codex.findings' .signum/spec_validation.json
-  fi
-  if [ "$GEMINI_AVAIL" = "true" ]; then
-    echo ""
-    echo "--- Gemini spec review (edge cases + failure modes) ---"
-    jq -r '.gemini.findings' .signum/spec_validation.json
-  fi
+# Warnings (collect into array for display)
+WARNINGS=""
+if [ -f .signum/clover_report.json ] && [ "$(jq '.pass' .signum/clover_report.json)" = "false" ]; then
+  WARNINGS="${WARNINGS}\n- Clover: ACs may not fully capture the goal"
+  WARNINGS="${WARNINGS}\n$(jq -r '.coverage_gaps[] | "  - " + .' .signum/clover_report.json)"
+fi
+if [ -f .signum/intent_check.json ] && [ "$(jq '.concerns | length' .signum/intent_check.json)" -gt 0 ]; then
+  WARNINGS="${WARNINGS}\n- Intent alignment concerns:"
+  WARNINGS="${WARNINGS}\n$(jq -r '.concerns[] | "  - " + .' .signum/intent_check.json)"
+fi
+if [ "$READINESS" = "no-go" ]; then
+  WARNINGS="${WARNINGS}\n- Contractor self-critique returned no-go"
 fi
 
-# Show clover reconstruction test results if available
-if [ -f .signum/clover_report.json ]; then
-  CLOVER_PASS=$(jq -r '.pass' .signum/clover_report.json)
-  CLOVER_CONF=$(jq -r '.confidence' .signum/clover_report.json)
-  if [ "$CLOVER_PASS" = "true" ]; then
-    echo "Clover test: PASS (confidence=$CLOVER_CONF)"
-  else
-    echo ""
-    echo "--- Clover reconstruction WARNING ---"
-    echo "ACs may not fully capture the goal (confidence=$CLOVER_CONF)"
-    jq -r '.coverage_gaps[]' .signum/clover_report.json | sed 's/^/  - /'
-  fi
-fi
+echo "CONTRACT_ID=$CONTRACT_ID"
+echo "GOAL=$GOAL"
+echo "RISK=$RISK"
+echo "INSCOPE=$INSCOPE"
+echo "VISIBLE_AC=$VISIBLE_AC"
+echo "HOLDOUT_COUNT=$HOLDOUT_COUNT"
+echo "SPEC=$SPEC_TOTAL/115 ($SPEC_GRADE)"
+echo "CLOVER=$CLOVER"
+echo "INTENT=$INTENT"
+echo "RISK_SIGNALS=$RISK_SIGNALS"
+echo "READINESS=$READINESS"
+if [ -n "$WARNINGS" ]; then echo -e "WARNINGS:$WARNINGS"; fi
 ```
 
-Also display any riskSignals if riskLevel is "high":
+**Markdown presentation:** After collecting data, present the contract summary as **markdown text output** (NOT bash echo). This ensures proper rendering in the terminal:
 
-```bash
-jq -r 'if .riskLevel == "high" then "Risk signals: " + (.riskSignals // [] | join(", ")) else empty end' \
-  .signum/contract.json
+```markdown
+## Contract: <CONTRACT_ID>
+
+**Goal:** <GOAL — full text, never truncated>
+
+| Field | Value |
+|-------|-------|
+| Risk | <RISK> |
+| Scope | <INSCOPE> |
+| ACs | <VISIBLE_AC> visible + <HOLDOUT_COUNT> holdout |
+| Spec quality | <SPEC_TOTAL>/115 (<SPEC_GRADE>) |
+| Clover | <CLOVER> |
+| Intent | <INTENT> |
+
+<if RISK is "high">
+**Risk signals:** <RISK_SIGNALS>
+</if>
+
+<if WARNINGS non-empty>
+### Warnings
+<WARNINGS list>
+</if>
 ```
 
-```bash
-# Show glossary status
-GLOSSARY_FILE="${PROJECT_ROOT:-$PWD}/project.glossary.json"
-if [ -f "$GLOSSARY_FILE" ]; then
-  GVER=$(jq -r '.version // "unknown"' "$GLOSSARY_FILE")
-  GTERMS=$(jq -r '.canonicalTerms | length' "$GLOSSARY_FILE")
-  echo "Glossary: loaded (version $GVER, $GTERMS terms)"
-else
-  echo "Glossary: not found"
-fi
-```
-
-```bash
-# Show project intent status
-if jq -e '.contextInheritance.projectRef' .signum/contract.json >/dev/null 2>&1; then
-  PROJECT_REF=$(jq -r '.contextInheritance.projectRef' .signum/contract.json)
-  if [ "$PROJECT_REF" = "not_found" ]; then
-    echo "Project intent: not found (low risk, continued)"
-  else
-    echo "Project intent: $PROJECT_REF (loaded)"
-  fi
-elif jq -e '.contextInheritance | has("projectRef")' .signum/contract.json >/dev/null 2>&1; then
-  echo "Project intent: waived by user"
-fi
-```
-
-```bash
-# Show intent alignment results
-INTENT_CHECK=".signum/intent_check.json"
-if [ -f "$INTENT_CHECK" ]; then
-  ALIGNED=$(jq -r '.aligned // "null"' "$INTENT_CHECK")
-  PARSE_ERR=$(jq -r '.parse_error // false' "$INTENT_CHECK")
-  CONCERNS=$(jq -r '.concerns | length' "$INTENT_CHECK")
-  if [ "$PARSE_ERR" = "true" ] || [ "$ALIGNED" = "null" ]; then
-    echo "Intent alignment: skipped (check failed)"
-  elif [ "$ALIGNED" = "false" ] || [ "$CONCERNS" -gt 0 ]; then
-    echo ""
-    echo "--- Intent alignment WARNING ---"
-    jq -r '.concerns[]' "$INTENT_CHECK" | sed 's/^/  - /'
-    GLOSSARY_V=$(jq -r '.glossary_violations | length' "$INTENT_CHECK")
-    if [ "$GLOSSARY_V" -gt 0 ]; then
-      echo "Glossary violations:"
-      jq -r '.glossary_violations[]' "$INTENT_CHECK" | sed 's/^/  - /'
-    fi
-  else
-    echo "Intent alignment: OK"
-  fi
-fi
-```
-
-```bash
-# Show readinessForPlanning verdict (v3.7 self-critique gate)
-RISK_FOR_GATE=$(jq -r '.riskLevel // "low"' .signum/contract.json)
-if jq -e '.readinessForPlanning' .signum/contract.json >/dev/null 2>&1; then
-  VERDICT=$(jq -r '.readinessForPlanning.verdict' .signum/contract.json)
-  SUMMARY=$(jq -r '.readinessForPlanning.summary // "no summary"' .signum/contract.json)
-  echo "Readiness: $VERDICT — $SUMMARY"
-  if [ "$VERDICT" = "no-go" ]; then
-    echo "WARNING: Contractor self-critique returned no-go. Review the contract before approving."
-  fi
-elif [ "$RISK_FOR_GATE" != "low" ]; then
-  echo "WARNING: readinessForPlanning absent on $RISK_FOR_GATE-risk contract. Contractor may not have run self-critique."
-fi
-```
+If spec validation ran (medium/high risk), show Codex and Gemini findings as collapsed details below the table — do NOT inline them into the table.
 
 **Present the following 5-item approval checklist to the user.** Display it as a numbered list and ask for a yes/no answer for each item:
 
