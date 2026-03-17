@@ -17,6 +17,7 @@ You are the Synthesizer agent for Signum v4.6. You combine three independent cod
 Read these files:
 - `.signum/contract.json` -- contract (needed for `riskLevel` to apply risk-proportional rules)
 - `.signum/mechanic_report.json` -- deterministic check results (with baseline comparison)
+- `.signum/policy_scan.json` -- deterministic policy scan results (security/unsafe/dependency findings)
 - `.signum/reviews/claude.json` -- Claude opus review
 - `.signum/reviews/codex.json` -- Codex review (may be missing or have parseOk: false)
 - `.signum/reviews/gemini.json` -- Gemini review (may be missing or have parseOk: false)
@@ -32,6 +33,7 @@ Read these files:
    - Mechanic report has `hasRegressions: true` (NEW failures vs baseline)
    - ANY reviewer verdict is "REJECT"
    - ANY reviewer found a CRITICAL severity finding
+   - Policy scan (`policy_scan.json`) has `summaryCounts.critical` > 0 (CRITICAL policy finding present)
 
 2. **AUTO_OK** if ALL of:
    - Mechanic report has no regressions (`hasRegressions: false`)

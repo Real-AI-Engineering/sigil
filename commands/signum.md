@@ -45,7 +45,7 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
     "AUDIT": {
       "description": "Multi-angle verification with regression detection",
       "iterativeAudit": "review-fix loop with best-of-N selection",
-      "steps": ["mechanic (lint/typecheck/tests vs baseline)", "holdout validation", "Claude semantic review", "Codex security review", "Gemini performance review", "synthesizer consensus", "iterative review-fix loop (up to 20 iterations)"],
+      "steps": ["mechanic (lint/typecheck/tests vs baseline)", "policy scanner (zero LLM, security/unsafe/dependency patterns)", "holdout validation", "Claude semantic review", "Codex security review", "Gemini performance review", "synthesizer consensus", "iterative review-fix loop (up to 20 iterations)"],
       "duration": "1-3 min (risk-proportional)",
       "approvals": 0
     },
@@ -1634,6 +1634,41 @@ echo "Mechanic done. Lint=$LINT_EXIT(bl:$BL_LINT) Typecheck=$TYPE_EXIT(bl:$BL_TY
 
 If any check has a NEW regression, continue to reviews — mechanic regression influences the final decision but does not block the audit.
 
+### Step 3.1.3: Policy scanner (bash, zero LLM cost)
+
+Run the deterministic policy scanner on `.signum/combined.patch`. This step scans addition lines only for security, unsafe, and dependency patterns. Use the Bash tool:
+
+```bash
+# Resolve policy-scanner.sh from known trusted Signum install roots only.
+# SIGNUM_PLUGIN_DIR env var is intentionally excluded to prevent environment
+# hijacking — only fixed install paths derived from $HOME are trusted.
+_SIGNUM_SCANNER=""
+for _d in \
+  "${HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/policy-scanner.sh" ] || continue
+  _SIGNUM_SCANNER="${_d}/lib/policy-scanner.sh"
+  break
+done
+if [ -z "$_SIGNUM_SCANNER" ]; then
+  echo "ERROR: policy-scanner.sh not found in Signum plugin directories" >&2
+  exit 1
+fi
+bash "$_SIGNUM_SCANNER" .signum/combined.patch
+```
+
+This writes `.signum/policy_scan.json` with fields: `scannedAt`, `patchFile`, `findings` (array), and `summaryCounts` ({critical, major, minor, total}).
+
+Check for CRITICAL findings:
+
+```bash
+POLICY_CRITICAL=$(jq -r '.summaryCounts.critical // 0' .signum/policy_scan.json)
+echo "Policy scan: critical=$POLICY_CRITICAL findings total=$(jq -r '.summaryCounts.total' .signum/policy_scan.json)"
+```
+
+If `POLICY_CRITICAL` is greater than 0, the synthesizer will AUTO_BLOCK. Continue to reviews — the synthesizer reads `policy_scan.json` and applies the block rule deterministically.
+
 ### Step 3.1.5: Holdout validation
 
 **Skip if `RISK_LEVEL` is `low`.** Write an empty holdout report and proceed to Step 3.2.
@@ -2218,7 +2253,7 @@ fi
 
 **Re-run the full audit subpipeline:**
 
-Re-run Steps 2.4 (scope gate), 2.5 (policy compliance if applicable), 3.0.5 (repo-contract invariants), 3.1 (mechanic), 3.1.5 (holdout validation), 3.2-3.3.5 (reviews — risk-proportional), and 3.5 (synthesizer).
+Re-run Steps 2.4 (scope gate), 2.5 (policy compliance if applicable), 3.0.5 (repo-contract invariants), 3.1 (mechanic), 3.1.3 (policy scanner), 3.1.5 (holdout validation), 3.2-3.3.5 (reviews — risk-proportional), and 3.5 (synthesizer).
 
 Pass `currentIteration` to the synthesizer prompt:
 
@@ -2531,6 +2566,12 @@ EXECUTE_ENV=$(build_envelope .signum/execute_log.json)
 MECHANIC_ENV=$(build_envelope .signum/mechanic_report.json)
 HOLDOUT_ENV=$(build_envelope .signum/holdout_report.json)
 
+# Policy scan envelope — written to temp file so jq reads content directly,
+# avoiding shell variable limits on large reports.
+POLICY_SCAN_ENV_TMP=$(mktemp)
+trap 'rm -f "$POLICY_SCAN_ENV_TMP"' EXIT
+build_envelope .signum/policy_scan.json > "$POLICY_SCAN_ENV_TMP"
+
 # Audit summary envelope
 AUDIT_ENV=$(build_envelope .signum/audit_summary.json)
 
@@ -2656,6 +2697,7 @@ jq -n \
   --argjson executeEnv "$EXECUTE_ENV" \
   --argjson mechanicEnv "$MECHANIC_ENV" \
   --argjson holdoutEnv "$HOLDOUT_ENV" \
+  --slurpfile policyScanEnv "$POLICY_SCAN_ENV_TMP" \
   --argjson auditEnv "$AUDIT_ENV" \
   --argjson approvalEnv "$APPROVAL_ENV" \
   --argjson reviewsEnv "$REVIEWS_JSON" \
@@ -2686,6 +2728,7 @@ jq -n \
     checks: {
       mechanic: $mechanicEnv,
       holdout: $holdoutEnv,
+      policy_scan: $policyScanEnv[0],
       reviews: $reviewsEnv,
       auditSummary: $auditEnv
     }
