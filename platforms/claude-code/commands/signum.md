@@ -1632,6 +1632,100 @@ fi
 
 If any holdout fails, continue to reviews but synthesizer treats it as regression signal.
 
+### Step 3.2.0: Gather review context
+
+Run a single Bash block to build `.signum/review_context.json`. This file provides git history for changed files and issue references extracted from commit messages — used later to enrich the Claude reviewer prompt.
+
+```bash
+python3 - << 'PYEOF'
+import json, os, subprocess, re
+
+# --- git_history: one entry per file changed in combined.patch ---
+git_history = []
+patch_path = '.signum/combined.patch'
+if os.path.exists(patch_path):
+    with open(patch_path) as f:
+        patch = f.read()
+    files = re.findall(r'^\+\+\+ b/(.+)$', patch, re.MULTILINE)
+    seen = set()
+    for filepath in files:
+        if filepath in seen:
+            continue
+        seen.add(filepath)
+        try:
+            result = subprocess.run(
+                ['git', 'log', '-1', '--format=%h\x1f%s\x1f%ad', '--date=short', '--', filepath],
+                capture_output=True, text=True
+            )
+            line = result.stdout.strip()
+            if line:
+                sha, subject, date = line.split('\x1f', 2)
+                git_history.append({'file': filepath, 'last_commit_sha': sha, 'subject': subject, 'date': date})
+            else:
+                git_history.append({'file': filepath, 'last_commit_sha': '', 'subject': '', 'date': ''})
+        except Exception:
+            git_history.append({'file': filepath, 'last_commit_sha': '', 'subject': '', 'date': ''})
+# If patch absent or empty, git_history stays []
+
+# --- issue_refs: extract issue IDs from recent commit messages ---
+issue_refs = []
+gh_available = False
+try:
+    r = subprocess.run(['which', 'gh'], capture_output=True)
+    gh_available = r.returncode == 0
+except Exception:
+    pass
+
+if git_history:
+    shas = [e['last_commit_sha'] for e in git_history if e['last_commit_sha']]
+    seen_ids = set()
+    for sha in shas:
+        try:
+            r = subprocess.run(['git', 'log', '-1', '--format=%B', sha], capture_output=True, text=True)
+            msg = r.stdout
+            ids = re.findall(r'#(\d+)', msg)
+            for issue_id in ids:
+                if issue_id in seen_ids:
+                    continue
+                seen_ids.add(issue_id)
+                title_or_null = None
+                tracker = 'unknown'
+                if gh_available:
+                    try:
+                        gr = subprocess.run(
+                            ['gh', 'issue', 'view', issue_id, '--json', 'title', '-q', '.title'],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if gr.returncode == 0 and gr.stdout.strip():
+                            title_or_null = gr.stdout.strip()
+                            tracker = 'github'
+                    except Exception:
+                        pass
+                issue_refs.append({'id': issue_id, 'title_or_null': title_or_null, 'tracker': tracker})
+        except Exception:
+            pass
+
+# --- project_intent: read project.intent.md if present ---
+project_intent = None
+for candidate in ['project.intent.md', os.path.join(os.getcwd(), 'project.intent.md')]:
+    if os.path.exists(candidate):
+        with open(candidate) as f:
+            project_intent = f.read()
+        break
+
+result = {
+    'git_history': git_history,
+    'issue_refs': issue_refs,
+    'project_intent': project_intent,
+}
+with open('.signum/review_context.json', 'w') as f:
+    json.dump(result, f, indent=2)
+print(f"review_context.json written: {len(git_history)} file(s), {len(issue_refs)} issue ref(s), intent={'yes' if project_intent else 'null'}")
+PYEOF
+```
+
+If the patch does not exist or contains no file paths, `git_history` and `issue_refs` will be empty arrays (no crash). If `gh` is unavailable, `issue_refs` entries have `tracker: "unknown"` and `title_or_null: null`.
+
 ### Step 3.2: Prepare prompts for all reviewers
 
 **If `RISK_LEVEL` is `low`:** skip this step entirely (no external prompts needed). Set `CODEX_AVAILABLE=false` and `GEMINI_AVAILABLE=false`, then proceed directly to Step 3.2.5 (Claude-only).
@@ -1687,12 +1781,18 @@ For medium/high risk, launch the reviewer-claude Agent with `run_in_background: 
 
 **Claude (Agent tool, `run_in_background: true`):**
 
+Before launching the Claude reviewer Agent, read `.signum/review_context.json` and serialize it to a string. Then construct the agent prompt as follows (inject the review_context JSON content inline, not as a file path):
+
 ```
 Read .signum/contract.json, .signum/combined.patch, and .signum/mechanic_report.json.
 Also read .signum/iteration_delta.patch if it exists.
+The review_context for this review is: <REVIEW_CONTEXT_JSON>
 Follow lib/prompts/review-template.md and write your review to .signum/reviews/claude.json.
+Use the review_context above to fill in the {review_context} placeholder in the template.
 Write ONLY the JSON object, no markers, no markdown.
 ```
+
+Replace `<REVIEW_CONTEXT_JSON>` with the full JSON content of `.signum/review_context.json` read in the previous step.
 
 **Codex (Bash tool, `run_in_background: true`, only if CODEX_AVAILABLE):**
 

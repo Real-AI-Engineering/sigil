@@ -8,6 +8,7 @@ INPUT:
 - Contract: {contract_json}
 - Diff: {diff}
 - Mechanic report: {mechanic_report}
+- Review context: {review_context}
 
 Iteration delta (if present): {iteration_delta}
 
