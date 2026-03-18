@@ -5,8 +5,10 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.7.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.10.0-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
+
+[Landing page](https://skill7.dev/signum?ref=readme) · [Book a setup call](https://skill7.dev/signum?ref=readme#setup-call) · [Discussions](https://github.com/heurema/signum/discussions)
 
 ```bash
 claude plugin marketplace add heurema/emporium
@@ -189,7 +191,7 @@ All orchestration runs inside Claude Code. External providers (Codex CLI, Gemini
 
 ## See also
 
-- [skill7.dev/development/signum](https://skill7.dev/development/signum) — full documentation, pipeline detail, artifacts schema, cost estimates
+- [skill7.dev/signum](https://skill7.dev/signum?ref=readme) — landing page, setup call, email updates
 - [heurema/emporium](https://github.com/heurema/emporium) — plugin registry
 - [How it works](docs/how-it-works.md) — agents, trust boundaries, limitations
 - [Reference](docs/reference.md) — artifacts schema, troubleshooting
