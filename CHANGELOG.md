@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.10.0] - 2026-03-18
+
+### Added
+- **Evidence coverage score** — new `evidenceCoverage` section in audit_summary.json tracking AC verification rate and file review coverage. Formula: `(verified/total * 60) + (reviewed/total * 40)`. AC ID normalization handles mismatched formats (ac-1 vs AC1).
+- **Release verdict** — new `releaseVerdict` field (PROMOTE/HOLD/REJECT) alongside `decision`. Derived from decision + evidence coverage score. PROMOTE requires AUTO_OK + score >= 70.
+- **Finding support level** — `supportLevel` (HIGH/MEDIUM/LOW) on each deduplicated finding, calculated as `confirmedBy.length / availableReviews`. Replaces absolute count with relative measure.
+- **reviewedFiles[]** — new required field in all 3 review templates (general, security, performance). Lists every analyzed file including clean ones with no findings. Enables accurate file coverage tracking.
+
+### Changed
+- Synthesizer version bump to v4.9 in agent prompt
+
 ## [4.9.0] - 2026-03-17
 
 ### Added
