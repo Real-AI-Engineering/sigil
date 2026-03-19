@@ -186,7 +186,17 @@ You have a limited number of turns. Prioritize writing the contract over exhaust
 - NEVER use shell commands in verify blocks — use typed DSL primitives only
 - For API projects: prefer `http` primitive over `exec`
 - For file-based projects: prefer `exec` with test/ls/cat + `expect`
-- If no programmatic verification is possible, use `verify.type: "manual"` (legacy format)
+- If you cannot express programmatic verification with the DSL, the contract is not ready. Add an open question or rewrite the AC until it has executable verification.
+- NEVER emit `verify.type: "manual"` for acceptance criteria or holdouts
+- Every visible AC and every holdout MUST use the typed DSL object with `steps`
+- Every verify block MUST be non-vacuous: it must assert observable state using one of:
+  - `expect.stdout_contains`, `expect.stdout_matches`, `expect.file_exists`, `expect.file_not_exists`, `expect.json_path` + `equals`
+  - predicate execs such as `test`, `grep`, or `jq -e`
+- BAD: `{"steps":[{"exec":{"argv":["ls","src"]}}]}` (no assertion)
+- BAD: `{"steps":[{"exec":{"argv":["cat","file.txt"]}}]}` (no assertion)
+- GOOD: `{"steps":[{"exec":{"argv":["cat","file.txt"]}},{"expect":{"stdout_contains":"hello"}}]}`
+- GOOD: `{"steps":[{"exec":{"argv":["test","-f","src/schema.json"]}}]}`
+- The boundary verifier will execute these verify blocks deterministically after the engineer returns. If they are non-executable or vacuous, the phase transition will be blocked.
 - Risk assessment is DETERMINISTIC — follow the rules exactly, don't use judgment
 - Generate holdouts BEFORE finalizing acceptanceCriteria to avoid derivability — write them from the spec description only
 - For medium risk: generate at least 2 holdout scenarios

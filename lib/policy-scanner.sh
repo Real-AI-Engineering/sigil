@@ -103,8 +103,12 @@ declare -a PATTERNS=(
   "security|MAJOR|weak_crypto|md5\s*\(|sha1\s*\(|DES\.|RC4\.|hashlib\.md5|hashlib\.sha1"
   # unsafe: unchecked any-type (TypeScript)
   "unsafe|MINOR|unchecked_any|:\s*any\b|as\s+any\b"
-  # unsafe: TODO/FIXME/HACK markers
-  "unsafe|MINOR|todo_marker|TODO:|FIXME:|HACK:|XXX:"
+  # unsafe: incomplete implementation markers (CRITICAL — direct incident class)
+  "unsafe|CRITICAL|incomplete_implementation|TODO:|FIXME:|HACK:|XXX:"
+  # unsafe: incomplete implementation via code patterns
+  "unsafe|CRITICAL|incomplete_implementation|panic\(\"not implemented\"\)|panic\(\"todo\"\)|raise\s+NotImplementedError|throw\s+new\s+Error\(\"TODO\"\)"
+  # unsafe: suspicious nil/null returns
+  "unsafe|MINOR|suspicious_return|return nil\s*//|return nil\s*$|return null\s*//\s*TODO"
   # unsafe: debug statements (no generic print — too noisy)
   "unsafe|MINOR|debug_print|console\.log\s*\(|debugger\s*;|pprint\s*\(|console\.debug\s*\("
   # dependency: new package entry in package.json (quoted name followed by quoted version)

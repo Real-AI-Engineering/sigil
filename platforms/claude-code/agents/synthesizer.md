@@ -24,6 +24,7 @@ Read these files:
 - `.signum/holdout_report.json` -- holdout scenario results (if exists)
 - `.signum/execute_log.json` -- execution attempt history
 - `.signum/audit_iteration_log.json` -- previous iteration results (if exists, for iterative AUDIT)
+- `.signum/receipts/execute.json` -- execute boundary receipt (required for AC evidence gating)
 
 ## Synthesis Rules (DETERMINISTIC -- follow exactly)
 
@@ -34,6 +35,13 @@ Read these files:
    - ANY reviewer verdict is "REJECT"
    - ANY reviewer found a CRITICAL severity finding
    - Policy scan (`policy_scan.json`) has `summaryCounts.critical` > 0 (CRITICAL policy finding present)
+   - Execute receipt (`.signum/receipts/execute.json`) is missing
+   - Execute receipt status is not `PASS`
+   - Any visible AC from `.signum/contract-engineer.json` has no matching entry in `execute.json` `.ac_evidence`
+   - Any visible AC has `verify_exit_code != 0`
+   - Any visible AC has `verify_format != "dsl"`
+   - Any visible AC is marked `vacuous: true` on medium/high risk
+   - Execute receipt reports out-of-scope changes or missing inScope paths
 
 2. **AUTO_OK** if ALL of:
    - Mechanic report has no regressions (`hasRegressions: false`)
@@ -171,6 +179,14 @@ Cross-iteration comparison uses these canonical deduplicated findings, not raw r
 ### Early stop signal
 
 The **orchestrator** owns the early stop counter, not the synthesizer. The synthesizer only reports `recommendEarlyStop: true` when `iterationScore` did not improve. The orchestrator tracks consecutive non-improving iterations and decides when to stop.
+
+## Execute Receipt Coverage Gate
+
+For every visible acceptance criterion, verify that `.signum/receipts/execute.json` `.ac_evidence` contains an entry with the same AC id.
+If any visible AC is missing evidence, AUTO_BLOCK.
+If any AC evidence has `verify_exit_code != 0`, AUTO_BLOCK.
+If the receipt itself is absent or has `status != "PASS"`, AUTO_BLOCK.
+This gate overrides reviewer approval. Strong reviews without AC evidence are insufficient.
 
 ## Rules
 
