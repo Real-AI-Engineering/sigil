@@ -1,9 +1,9 @@
 ---
 name: init
-description: Bootstrap project context (project.intent.md and project.glossary.json) from an existing codebase using deterministic scan + LLM synthesis + interactive editing.
+description: Bootstrap project context (project.intent.md and project.glossary.json) from an existing codebase using deterministic scan + LLM synthesis + interactive editing. Use --actualize to update existing intent against current code state.
 arguments:
   - name: flags
-    description: "Optional: --force to overwrite existing files, --project-root <path> to specify target directory"
+    description: "Optional: --force to overwrite existing files, --actualize to update existing intent with section-by-section diff, --project-root <path> to specify target directory"
     required: false
 ---
 
@@ -25,12 +25,14 @@ SCAN → SYNTHESIZE → PRESENT → VERIFY
 
 Parse `$ARGUMENTS`:
 - If `--force` is present, set FORCE_MODE=true (overwrite existing files without prompting)
+- If `--actualize` is present, set ACTUALIZE_MODE=true (update existing intent with section diff)
 - If `--project-root <path>` is present, use that path. Otherwise use current directory.
+- If both `--force` and `--actualize` are present: error "Cannot combine --force and --actualize. Use --actualize for section-by-section updates." and stop.
 - Any other argument: print usage and stop.
 
 **Usage:**
 ```
-/signum init [--force] [--project-root <path>]
+/signum init [--force] [--actualize] [--project-root <path>]
 ```
 
 ---
@@ -45,14 +47,25 @@ ls project.intent.md 2>/dev/null && echo "INTENT_EXISTS=true" || echo "INTENT_EX
 ls project.glossary.json 2>/dev/null && echo "GLOSSARY_EXISTS=true" || echo "GLOSSARY_EXISTS=false"
 ```
 
-If `project.intent.md` OR `project.glossary.json` already exists AND `--force` was NOT provided:
-- Print this message and STOP:
+**If ACTUALIZE_MODE=true:**
+- If `project.intent.md` does NOT exist: print error and STOP:
+  ```
+  actualize requires an existing project.intent.md. Run /signum init first.
+  ```
+- If `project.glossary.json` does NOT exist: print warning "Glossary will be created fresh." and continue.
+- Do NOT prompt about overwrite — actualize uses section-by-section confirmation.
+
+**If FORCE_MODE=false AND ACTUALIZE_MODE=false:**
+- If `project.intent.md` OR `project.glossary.json` already exists: print message and STOP:
   ```
   project.intent.md already exists.
 
   To overwrite, run: /signum init --force
-  To update (merge), run: /signum init --force
+  To update with diff review, run: /signum init --actualize
   ```
+
+**If FORCE_MODE=true AND ACTUALIZE_MODE=false:**
+- Continue with full overwrite (existing behavior).
 
 ### 1b. Run scanner
 
@@ -79,11 +92,20 @@ SCAN complete. Found signals:
 
 ## Step 2: SYNTHESIZE (LLM)
 
+Before passing SCAN_SIGNALS to the synthesizer, inject the mode:
+
+**If ACTUALIZE_MODE=true:**
+- Tell the synthesizer: "Run in actualize mode. The signals JSON contains existing intent in existingFiles.intent. Produce ACTUALIZE_DIFF output comparing existing sections against current signals. Do NOT produce full file drafts."
+
+**Otherwise (full mode):**
+- Tell the synthesizer: "Run in full mode. Produce complete project.intent.md and project.glossary.json drafts." (existing behavior)
+
 Pass SCAN_SIGNALS to the init-synthesizer agent. The synthesizer will:
 1. Apply source precedence hierarchy (docs/ > CLAUDE.md > README > package.json)
-2. Generate `project.intent.md` with evidence comments and confidence annotations
-3. Generate `project.glossary.json` with canonicalTerms and aliases
-4. Emit coverage summary
+2. In full mode: generate full drafts with evidence comments and confidence annotations
+3. In actualize mode: generate ACTUALIZE_DIFF with per-section status and proposed changes
+4. Generate/merge `project.glossary.json` with canonicalTerms and aliases
+5. Emit coverage summary
 
 **Key rules enforced by synthesizer:**
 - Non-Goals ONLY from explicit negative signals (ADRs rejected, README "Not supported", CLAUDE.md exclusions)
@@ -93,7 +115,9 @@ Pass SCAN_SIGNALS to the init-synthesizer agent. The synthesizer will:
 
 ---
 
-## Step 3: PRESENT (interactive)
+## Step 3: PRESENT
+
+### Full mode (default)
 
 Show the generated drafts to the user with a separator:
 
@@ -131,6 +155,96 @@ If the user chooses to edit (options 2 or 3), open the draft for editing and pre
 
 On cancel (option 5): print "Cancelled. No files written." and stop.
 
+### Actualize mode
+
+The synthesizer returns an ACTUALIZE_DIFF with one entry per section. Process sections in order:
+**Goal → Core Capabilities → Non-Goals → Success Criteria → Personas**
+
+First show the summary:
+```
+Actualize analysis:
+  Sections unchanged: N
+  Sections updated: N
+  Sections added: N
+  Glossary: +N terms, +M aliases
+
+Reviewing changed sections...
+```
+
+**If ALL sections are UNCHANGED and glossary has no additions:** print "Everything up to date. No changes needed." and STOP without writing.
+
+For each section from the ACTUALIZE_DIFF:
+
+```
+────────────────────────────────────────
+Section: <Name>   [UNCHANGED | UPDATED | ADDED | REMOVED]
+────────────────────────────────────────
+```
+
+**If UNCHANGED:** print "No changes. Auto-accepted." and move to next section. Do NOT prompt.
+
+**If UPDATED:**
+```
+EXISTING:
+<existing section content>
+
+PROPOSED:
+<new section content from signals>
+
+Evidence: <source files>
+Confidence: <high|medium|low>
+Reason: <one sentence>
+
+[a] Accept proposed  [k] Keep existing  [e] Edit proposed  [s] Skip
+Choice:
+```
+
+**If ADDED:**
+```
+NEW SECTION (not in existing intent):
+<proposed content>
+
+Evidence: <source files>
+Confidence: <high|medium|low>
+
+[a] Accept  [s] Skip (omit section)
+Choice:
+```
+
+**If REMOVED:**
+```
+EXISTING SECTION — signals no longer support this:
+<existing content>
+Reason: <synthesizer's explanation>
+
+[r] Remove section  [k] Keep existing
+Choice:
+```
+
+After all intent sections, show glossary changes:
+```
+────────────────────────────────────────
+Glossary: +N terms, +M aliases
+────────────────────────────────────────
+[list new terms]
+[a] Accept glossary additions  [s] Skip glossary
+Choice:
+```
+
+Final confirmation:
+```
+Summary:
+  Goal:               <unchanged/updated/added> (<accepted/kept>)
+  Core Capabilities:  <unchanged/updated/added> (<accepted/kept>)
+  Non-Goals:          <unchanged/updated/added> (<accepted/kept>)
+  Success Criteria:   <unchanged/updated/added> (<accepted/kept>)
+  Personas:           <unchanged/updated/added> (<accepted/kept>)
+  Glossary:           +N terms (<accepted/skipped>)
+
+[1] Write changes  [2] Cancel
+Choice:
+```
+
 ---
 
 ## Step 4: WRITE
@@ -139,11 +253,17 @@ After user confirms, write the files using the Write tool (NOT shell heredoc —
 
 For `project.intent.md`:
 - First check: `[ -L project.intent.md ]` — if symlink, refuse and print: "ERROR: project.intent.md is a symlink. Refusing to overwrite for safety."
-- Use the **Write** tool to write the synthesized content to `project.intent.md`
+- **Full mode:** Use the Write tool to write the full synthesized content.
+- **Actualize mode:** Reconstruct the file by merging:
+  - ACCEPTED sections: use proposed content from synthesizer (with fresh evidence comments)
+  - KEPT/SKIPPED sections: use content from existing project.intent.md verbatim (including any existing comments)
+  - EDITED sections: use user-edited content
+  - Preserve the header line from existing file.
+  - Section order follows the registry: Goal, Core Capabilities, Non-Goals, Success Criteria, Personas
 
 For `project.glossary.json`:
 - First check: `[ -L project.glossary.json ]` — if symlink, refuse and print: "ERROR: project.glossary.json is a symlink. Refusing to overwrite for safety."
-- Use the **Write** tool to write the synthesized JSON to `project.glossary.json`
+- Use the **Write** tool to write the synthesized/merged JSON to `project.glossary.json`
 
 **Security notes:**
 - NEVER use shell heredoc (`cat << EOF`) to write LLM-generated content — delimiter injection risk
@@ -199,13 +319,16 @@ Next steps:
 - If synthesis produces empty Goal: warn user, proceed with TODO placeholder
 - If jq/python3 unavailable: skip verification step, still write files
 - If project has no signals at all (no README, no manifest, no git): warn and emit minimal template with TODO markers throughout
+- If actualize with no existing intent: error and stop (must run init first)
 
 ---
 
 ## Notes
 
 - Files are written to project root (not `.signum/`)
-- `--force` overwrites without prompting — use when updating existing intent
+- `--force` overwrites without prompting — use for full regeneration
+- `--actualize` compares existing intent against current code signals — use for updates
 - The synthesizer never writes files — this command writes after user confirms
 - Evidence comments (`<!-- evidence: ... -->`) are HTML comments, invisible in rendered markdown
 - Low-confidence sections have TODO markers to guide manual editing
+- In actualize mode, UNCHANGED sections are auto-accepted to keep the flow fast
