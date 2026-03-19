@@ -105,6 +105,10 @@ Signum grades your spec, shows the contract for approval, implements with an aut
 
 **Diff progression** — On review pass 2+, reviewers receive both the full feature diff and an iteration delta showing only what changed in the fix. This focuses review on the actual repair, reduces noise from re-discovering accepted code, and improves convergence speed.
 
+**Module lifecycle tracking** — A `modules.yaml` manifest at the project root declares module status: `active`, `experimental`, `deprecated`, or `removed`. Deprecated modules carry `remove_after` deadlines and `replaced_by` pointers. The contractor reads this before generating contracts — cleanup tasks auto-detect removal candidates and generate structured `removals` and `cleanupObligations` entries.
+
+**Cleanup contracts** — Contract schema v3.8 adds first-class support for code removal. `removals` entries specify files/directories to delete with `preventReintroduction` flags. `cleanupObligations` use K8s Finalizer semantics — blocking obligations (e.g., "remove all imports of deleted module") must be fulfilled before `AUTO_OK`. The DSL supports `file_not_exists` assertions and `grep` for reference-checking verify blocks. Evidence of successful removals is captured in `proofpack.json`.
+
 ## Architecture
 
 ```

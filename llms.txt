@@ -23,6 +23,9 @@ PACK: Bundles contract, diff, baseline, reviews, mechanic report, holdout report
 - Risk-proportional ceremony: Low risk uses Claude-only review; medium adds holdouts + 2-model; high uses full 3-model panel
 - Holdout scenarios: Blind acceptance criteria not shown to the Engineer, validated after implementation
 - Baseline comparison: All checks run before and after changes to detect regressions vs pre-existing failures
+- Module lifecycle: modules.yaml manifest declares module status (active/experimental/deprecated/removed) with remove_after deadlines
+- Cleanup contracts: v3.8 schema adds removals (files to delete) and cleanupObligations (blocking finalizers) with file_not_exists and grep DSL assertions
+- Removal evidence: proofpack v4.7 includes removalEvidence section tracking deletion state and obligation fulfillment
 
 ## Decision Outcomes
 
@@ -46,3 +49,5 @@ HUMAN_REVIEW: Disagreements, conditional verdicts, or insufficient review covera
 - lib/signum-ci.sh — CI wrapper script
 - lib/schemas/contract.schema.json — Contract JSON schema
 - lib/schemas/proofpack.schema.json — Proofpack JSON schema
+- lib/schemas/modules.schema.json — Module lifecycle manifest schema
+- modules.yaml — Example module manifest for the signum project itself

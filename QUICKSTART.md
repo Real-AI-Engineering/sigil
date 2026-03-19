@@ -137,6 +137,30 @@ cat > project.glossary.json << 'EOF'
 EOF
 ```
 
+### modules.yaml (optional)
+
+Declares module lifecycle status. Enables cleanup contracts with structured removals.
+
+```bash
+cat > modules.yaml << 'EOF'
+version: 1
+modules:
+  - path: src/api/
+    name: api
+    status: active
+    owner: "@you"
+  - path: src/old-api/
+    name: old-api
+    status: deprecated
+    deprecated_since: "2026-03-01"
+    remove_after: "2026-04-01"
+    replaced_by: src/api/
+    reason: "Replaced by v2 API"
+EOF
+```
+
+When you run `/signum "remove the old-api module"`, the contractor reads `modules.yaml`, generates `removals` and `cleanupObligations` entries, and the engineer deletes files + cleans up references in a single verified pass.
+
 ### repo-contract.json (optional)
 
 Invariants that must always hold. Any regression is AUTO_BLOCK regardless of task.
