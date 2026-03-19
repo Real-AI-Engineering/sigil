@@ -1,5 +1,32 @@
 # Changelog
 
+## [4.13.0] - 2026-03-20
+
+### Added
+- **Receipt chain** — deterministic phase-boundary enforcement with append-only receipts (issue #7)
+  - `lib/snapshot-tree.sh` — workspace tree snapshot before each engineer launch, captures sorted manifest + tree hash
+  - `lib/boundary-verifier.sh` — runs AC verifiers via DSL runner after engineer returns, checks scope integrity (both out-of-scope and missing inScope), hashes artifacts, classifies evidence strength (observational/predicate/exit_only), writes append-only receipt to `.signum/runs/<run_id>/`
+  - `lib/transition-verifier.sh` — blocks execute→audit transition unless receipt is present, PASS, contract hash matches, artifact hashes valid, append-only chain intact, and all ACs have non-vacuous evidence
+  - Orchestrator steps: 2.0.5 (pre-execute snapshot), 2.4.6 (scope existence gate), 2.5 (boundary verification), 2.6 (transition verification)
+  - Iterative repair: fresh snapshot per attempt, boundary+transition verify per repair iteration, `RECEIPT_CHAIN_OK` flag prevents silent failure swallowing
+  - Synthesizer: **Execute Receipt Coverage Gate** — AUTO_BLOCK when receipt missing, status != PASS, any AC without evidence, or vacuous evidence on medium/high risk. Overrides reviewer approval.
+- **Vacuous verify detection** — boundary verifier classifies each AC verify block as `observational`, `predicate`, or `exit_only`. Exit-only blocked on medium/high risk contracts.
+- **Scope existence gate** (Step 2.4.6) — verifies all non-glob `inScope` paths exist after engineer runs. Catches the incident class where files were promised in contract but never created.
+
+### Changed
+- **Policy scanner** — `TODO:`, `FIXME:`, `HACK:`, `XXX:` upgraded from MINOR to CRITICAL `incomplete_implementation`. Added `panic("not implemented")`, `raise NotImplementedError`, `throw new Error("TODO")` patterns. Non-code files (markdown, json, yaml, docs, examples, tests) excluded from incomplete_implementation rules.
+- **Contractor prompt** — `verify.type: "manual"` forbidden. All ACs must use typed DSL with `steps`. Non-vacuous evidence required (must assert observable state via `expect.*` or predicates like `test`, `grep`, `jq -e`).
+- **Engineer prompt** — receipt-chain paths (`.signum/receipts/`, `.signum/runs/`, `.signum/snapshots/`) declared verifier-owned, forbidden for engineer writes.
+- **Archive mode** — preserves execute receipt before purging receipt chain intermediates.
+- **`allowNewFilesUnder` scope strictness** — only permits file additions, not modifications or deletions of existing files under those paths.
+
+### Security
+- `dsl-runner.sh` resolved from trusted Signum install paths only (prevents workspace-local runner injection); workspace fallback requires explicit `SIGNUM_TRUST_LOCAL=1`
+- `LC_ALL=C` enforced in all receipt chain scripts (prevents locale-dependent sort/join collation mismatches)
+- `git ls-files -- .` constrains file listing to workspace root (monorepo-safe)
+- Portable empty array expansion `${arr[@]+"${arr[@]}"}` for bash < 4.4 compatibility
+- Receipt chain verifiers are hard gates — missing scripts cause `exit 1`, not silent degradation
+
 ## [4.12.1] - 2026-03-20
 
 ## [4.12.0] - 2026-03-19
