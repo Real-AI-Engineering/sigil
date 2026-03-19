@@ -16,6 +16,7 @@
 #   --execution-context PATH    Execution context JSON
 #   --artifacts CSV             Artifact names under signum dir (default: combined.patch,execute_log.json)
 set -euo pipefail
+export LC_ALL=C
 
 PHASE="${1:-execute}"
 if [[ "$PHASE" == --* ]]; then
@@ -133,7 +134,7 @@ path_allowed() {
 
 list_files_null() {
   if git -C "$ABS_WORKSPACE" rev-parse --show-toplevel >/dev/null 2>&1; then
-    git -C "$ABS_WORKSPACE" ls-files -z --cached --others --exclude-standard
+    git -C "$ABS_WORKSPACE" ls-files -z --cached --others --exclude-standard -- .
   else
     local signum_name
     signum_name=$(basename "$ABS_SIGNUM_DIR")
@@ -155,6 +156,7 @@ write_manifest() {
     [[ -z "$rel_path" ]] && continue
     rel_path="${rel_path#./}"
     [[ -z "$rel_path" ]] && continue
+    [[ -f "$ABS_WORKSPACE/$rel_path" ]] || continue
     printf '%s\tsha256:%s\n' "$rel_path" "$(hash_file "$ABS_WORKSPACE/$rel_path")" >> "$tmp"
   done < <(list_files_null)
   sort "$tmp" > "$out"
@@ -408,16 +410,16 @@ else
 fi
 
 PASSED_AC_COUNT=$(( TOTAL_ACS - ${#FAILED_ACS[@]} ))
-CHANGED_JSON=$(json_array_from_lines "${CHANGED_PATHS[@]}")
-ADDED_JSON=$(json_array_from_lines "${ADDED_PATHS[@]}")
-MODIFIED_JSON=$(json_array_from_lines "${MODIFIED_PATHS[@]}")
-DELETED_JSON=$(json_array_from_lines "${DELETED_PATHS[@]}")
-OUT_OF_SCOPE_JSON=$(json_array_from_lines "${OUT_OF_SCOPE[@]}")
-MISSING_JSON=$(json_array_from_lines "${MISSING_IN_SCOPE[@]}")
-FAILED_JSON=$(json_array_from_lines "${FAILED_ACS[@]}")
-VACUOUS_JSON=$(json_array_from_lines "${VACUOUS_ACS[@]}")
-UNSUPPORTED_JSON=$(json_array_from_lines "${UNSUPPORTED_ACS[@]}")
-ARTIFACTS_JSON=$(json_array_from_lines "${ARTIFACT_LIST[@]}")
+CHANGED_JSON=$(json_array_from_lines ${CHANGED_PATHS[@]+"${CHANGED_PATHS[@]}"})
+ADDED_JSON=$(json_array_from_lines ${ADDED_PATHS[@]+"${ADDED_PATHS[@]}"})
+MODIFIED_JSON=$(json_array_from_lines ${MODIFIED_PATHS[@]+"${MODIFIED_PATHS[@]}"})
+DELETED_JSON=$(json_array_from_lines ${DELETED_PATHS[@]+"${DELETED_PATHS[@]}"})
+OUT_OF_SCOPE_JSON=$(json_array_from_lines ${OUT_OF_SCOPE[@]+"${OUT_OF_SCOPE[@]}"})
+MISSING_JSON=$(json_array_from_lines ${MISSING_IN_SCOPE[@]+"${MISSING_IN_SCOPE[@]}"})
+FAILED_JSON=$(json_array_from_lines ${FAILED_ACS[@]+"${FAILED_ACS[@]}"})
+VACUOUS_JSON=$(json_array_from_lines ${VACUOUS_ACS[@]+"${VACUOUS_ACS[@]}"})
+UNSUPPORTED_JSON=$(json_array_from_lines ${UNSUPPORTED_ACS[@]+"${UNSUPPORTED_ACS[@]}"})
+ARTIFACTS_JSON=$(json_array_from_lines ${ARTIFACT_LIST[@]+"${ARTIFACT_LIST[@]}"})
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 RECEIPT_STATUS="PASS"

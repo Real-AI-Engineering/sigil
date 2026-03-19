@@ -2483,21 +2483,26 @@ _LANE_CLEANUP_DONE=true
 After copying winner artifacts, run boundary verification to generate the execute receipt for this repair attempt. Then run the transition gate before re-entering audit.
 
 ```bash
+RECEIPT_CHAIN_OK=true
 if [ -n "${_SIGNUM_BOUNDARY:-}" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$ITER_NUM")
-  bash "$_SIGNUM_BOUNDARY" execute \
-    --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json" || {
+  if ! bash "$_SIGNUM_BOUNDARY" execute \
+    --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json"; then
     echo "BOUNDARY_BLOCK: repair attempt $ITER_NUM failed boundary verification"
-  }
+    RECEIPT_CHAIN_OK=false
+  fi
 fi
-if [ -n "${_SIGNUM_TRANSITION:-}" ]; then
+if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "${_SIGNUM_TRANSITION:-}" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$ITER_NUM")
-  bash "$_SIGNUM_TRANSITION" execute audit \
-    --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json" || {
+  if ! bash "$_SIGNUM_TRANSITION" execute audit \
+    --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json"; then
     echo "TRANSITION_BLOCK: repair attempt $ITER_NUM failed transition gate"
-  }
+    RECEIPT_CHAIN_OK=false
+  fi
 fi
 ```
+
+If `RECEIPT_CHAIN_OK` is `false`, the repair iteration's boundary evidence is incomplete. Continue to audit — the synthesizer will AUTO_BLOCK on missing or failed receipt.
 
 **After engineer completes, validate execute success before re-running audit:**
 

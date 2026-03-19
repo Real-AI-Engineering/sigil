@@ -11,6 +11,7 @@
 #   --receipt PATH
 #   --snapshot PATH
 set -euo pipefail
+export LC_ALL=C
 
 FROM_PHASE="${1:-}"
 TO_PHASE="${2:-}"

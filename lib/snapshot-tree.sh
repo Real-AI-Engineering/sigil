@@ -10,6 +10,7 @@
 #   lib/snapshot-tree.sh lane-A --workspace-root .signum/iterations/01/lanes/A \
 #       --signum-dir .signum/iterations/01/lanes/A/.signum
 set -euo pipefail
+export LC_ALL=C
 
 LABEL="${1:-pre-execute}"
 if [[ "$LABEL" == --* ]]; then
@@ -62,7 +63,7 @@ hash_file() {
 
 list_files_null() {
   if git -C "$WORKSPACE_ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
-    git -C "$WORKSPACE_ROOT" ls-files -z --cached --others --exclude-standard
+    git -C "$WORKSPACE_ROOT" ls-files -z --cached --others --exclude-standard -- .
   else
     local signum_name
     signum_name=$(basename "$SIGNUM_DIR")
@@ -94,6 +95,7 @@ while IFS= read -r -d '' rel_path; do
   [[ -z "$rel_path" ]] && continue
   rel_path="${rel_path#./}"
   [[ -z "$rel_path" ]] && continue
+  [[ -f "$ABS_WORKSPACE/$rel_path" ]] || continue
   file_hash=$(hash_file "$ABS_WORKSPACE/$rel_path")
   printf '%s\tsha256:%s\n' "$rel_path" "$file_hash" >> "$TMP_MANIFEST"
 done < <(list_files_null)
