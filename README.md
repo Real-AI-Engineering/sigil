@@ -5,7 +5,7 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.10.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.12.0-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
 
 [Landing page](https://skill7.dev/signum?ref=readme) · [Book a setup call](https://skill7.dev/signum?ref=readme#setup-call) · [Discussions](https://github.com/heurema/signum/discussions)

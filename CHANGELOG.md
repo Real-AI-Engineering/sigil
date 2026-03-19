@@ -2,6 +2,19 @@
 
 ## [4.12.0] - 2026-03-19
 
+### Added
+- **Anti-entropy system** — module lifecycle tracking and cleanup contracts for combating code quality degradation in AI-assisted development
+  - `modules.yaml` manifest + JSON Schema (`lib/schemas/modules.schema.json`) for declaring module lifecycle status (active/experimental/deprecated/removed)
+  - Contract schema v3.8: `removals` array (RM01-pattern) for declarative file/directory deletion with `preventReintroduction` and `modulesYamlTransition`
+  - Contract schema v3.8: `cleanupObligations` array (CO01-pattern) with K8s Finalizer semantics — blocking obligations prevent AUTO_OK
+  - `file_not_exists` DSL assertion for verifying successful removals
+  - `grep` added to DSL exec whitelist for reference-checking verify blocks
+  - Contractor: steps 1.7 (modules.yaml reading), 3.7 (cleanup task detection), 3.7.5 (removal/obligation extraction with auto-verify generation)
+  - Engineer: steps 2.5 (execute removals before implementation), 2.6 (execute cleanup obligations in repair loop)
+  - Synthesizer: `removalVerification` + `obligationVerification` sections, AUTO_BLOCK on unfulfilled blocking obligations
+  - Scope gate: removal target paths allowed as deletion targets
+- **Proofpack v4.7** — `removalEvidence` section with per-removal filesystem state and per-obligation fulfillment tracking
+
 ## [4.11.0] - 2026-03-19
 
 ## [4.10.0] - 2026-03-18
