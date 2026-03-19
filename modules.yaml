@@ -1,0 +1,43 @@
+version: 1
+modules:
+  - path: agents/
+    name: agents
+    status: active
+    owner: "@vi"
+    description: "Pipeline agent prompts (contractor, engineer, synthesizer, reviewers)"
+
+  - path: commands/
+    name: commands
+    status: active
+    owner: "@vi"
+    description: "Slash command entry points (signum, init)"
+
+  - path: lib/
+    name: lib
+    status: active
+    owner: "@vi"
+    description: "Core library (DSL runner, schemas, checks, templates)"
+
+  - path: lib/schemas/
+    name: schemas
+    status: active
+    owner: "@vi"
+    description: "JSON schemas for contract, proofpack, modules"
+
+  - path: tests/
+    name: tests
+    status: active
+    owner: "@vi"
+    description: "Test fixtures and validation scripts"
+
+  - path: platforms/
+    name: platforms
+    status: active
+    owner: "@vi"
+    description: "Platform-specific integrations (CI adapters)"
+
+  - path: docs/
+    name: docs
+    status: active
+    owner: "@vi"
+    description: "Documentation and ADRs"

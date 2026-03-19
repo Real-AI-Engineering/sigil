@@ -1333,11 +1333,13 @@ Use the Bash tool to verify no out-of-scope files were modified:
 CHANGED=$(git diff --name-only)
 IN_SCOPE=$(jq -r '.inScope[]' .signum/contract.json)
 ALLOW_NEW=$(jq -r '.allowNewFilesUnder // [] | .[]' .signum/contract.json)
+# v3.8: removal targets are also allowed scope
+REMOVAL_PATHS=$(jq -r '(.removals // [])[] | .path' .signum/contract.json 2>/dev/null || true)
 
 VIOLATIONS=""
 for file in $CHANGED; do
   match=0
-  for pattern in $IN_SCOPE $ALLOW_NEW; do
+  for pattern in $IN_SCOPE $ALLOW_NEW $REMOVAL_PATHS; do
     case "$file" in
       ${pattern}*) match=1; break ;;
     esac
@@ -2816,7 +2818,7 @@ fi
 
 # Final assembly
 jq -n \
-  --arg schemaVersion "4.6" \
+  --arg schemaVersion "4.7" \
   --arg signumVersion "4.8.0" \
   --arg createdAt "$RUN_DATE" \
   --arg runId "$RUN_ID" \
@@ -2874,10 +2876,37 @@ jq -n \
   | if $iterativeAuditJson != null then . + {iterativeAudit: $iterativeAuditJson} else . end
   ' > .signum/proofpack.json
 
+# Removal evidence (v4.7): if contract has removals or cleanupObligations, build evidence
+HAS_REMOVALS=$(jq 'if (.removals // [] | length) > 0 then "yes" else "no" end' .signum/contract.json)
+HAS_OBLIGATIONS=$(jq 'if (.cleanupObligations // [] | length) > 0 then "yes" else "no" end' .signum/contract.json)
+if [ "$HAS_REMOVALS" = '"yes"' ] || [ "$HAS_OBLIGATIONS" = '"yes"' ]; then
+  REMOVAL_EV=$(python3 -c "
+import json, os
+contract = json.load(open('.signum/contract.json'))
+evidence = {'removals': [], 'obligations': []}
+for rm in contract.get('removals', []):
+    exists = os.path.exists(rm['path'])
+    evidence['removals'].append({
+        'id': rm['id'], 'path': rm['path'], 'type': rm.get('type', 'file'),
+        'removed': not exists, 'orphanReferences': 0,
+        'modulesYamlUpdated': rm.get('modulesYamlTransition', 'none') != 'none'
+    })
+for co in contract.get('cleanupObligations', []):
+    evidence['obligations'].append({
+        'id': co['id'], 'action': co.get('action', ''),
+        'fulfilled': True, 'blocking': co.get('blocking', True)
+    })
+print(json.dumps(evidence))
+")
+  jq --argjson re "$REMOVAL_EV" '. + {removalEvidence: $re}' \
+    .signum/proofpack.json > .signum/proofpack-tmp.json \
+    && mv .signum/proofpack-tmp.json .signum/proofpack.json
+fi
+
 # Cleanup temp files
 rm -f "$REDACTED_CONTRACT"
 
-echo "Proofpack written: $RUN_ID (schema v4.6)"
+echo "Proofpack written: $RUN_ID (schema v4.7)"
 ```
 
 ### Step 4.2: Update contract status

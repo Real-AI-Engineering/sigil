@@ -28,6 +28,12 @@ You receive:
    - If found and valid JSON: read it, load canonicalTerms array and aliases object; set glossaryVersion to the file's `version` field
    - If found but malformed JSON: log a warning and continue as if the file were absent (no crash, glossaryVersion omitted)
    - If not found: omit the glossaryVersion field entirely from the contract (silent, no error)
+1.7. **Read modules.yaml** (before scan):
+   - Check if `PROJECT_ROOT/modules.yaml` exists
+   - If exists: read it, extract module list with statuses
+   - Note any deprecated/removed modules and their `replaced_by`, `remove_after` fields
+   - Use this information in step 3.7 (cleanup detection) and step 3.7.5 (removal extraction)
+   - If not found: continue without module lifecycle context
 2. **Scan codebase** (deterministic):
    - `find` / `tree` to understand project structure
    - `grep` for relevant files matching the feature description
@@ -114,11 +120,33 @@ You receive:
 
    This field is informational — it does not block the pipeline. Emit it regardless of risk level.
 
+3.7. **Cleanup task detection** (v3.8):
+   - If the user request contains cleanup keywords (remove, delete, clean up, deprecate, migrate away from, replace, rip out, drop, sunset, retire), set `taskType: "cleanup"` in `implementationStrategy`
+   - For non-cleanup tasks, infer `taskType` from keywords: fix/bug → `"bugfix"`, test → `"test"`, refactor → `"refactor"`, otherwise `"feature"`
+3.7.5. **Removal and obligation extraction** (v3.8, only when `taskType` is `"cleanup"` or request mentions removals):
+   - Identify files/directories to remove from user request and codebase scan
+   - Cross-reference with `modules.yaml` if available: check if removal targets match deprecated modules
+   - For each removal target, generate a `removals` entry:
+     - `id`: RM01, RM02, ...
+     - `path`: relative path to remove
+     - `reason`: why it should be removed
+     - `type`: "file" or "directory"
+     - `replacedBy`: path to replacement (if applicable, from `modules.yaml` `replaced_by` or user request)
+     - `preventReintroduction`: true if the path should never reappear
+     - `modulesYamlTransition`: infer from current module status → target status
+   - For each removal, auto-generate a `cleanupObligations` entry to verify no remaining references:
+     - `id`: CO01, CO02, ...
+     - `action`: "remove_references" or "update_imports"
+     - `target`: glob pattern for files that might reference the removed code
+     - `verify`: DSL steps using `grep` (exec) + `expect` (exit_code: 1) to confirm no references remain
+     - `blocking`: true (references to removed code must be cleaned up)
+   - Validate: removal paths must exist (for files/dirs being removed), no overlap with `inScope` paths
+   - If `modules.yaml` exists, add obligation to update module status in `modules.yaml`
 4. **Generate contract.json** with:
    - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
    - `status`: always set to `"draft"` when generating a new contract
    - `timestamps`: object with `createdAt` set to the current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), e.g. `"2026-03-13T10:00:00Z"`
-   - `schemaVersion`: always `"3.7"` for new contracts
+   - `schemaVersion`: always `"3.8"` for new contracts
    - `glossaryVersion`: set to the `version` from `project.glossary.json` if found; omit entirely when the file is absent
    - goal, inScope, outOfScope, allowNewFilesUnder (if new files needed)
    - acceptanceCriteria with typed verify blocks (DSL format), each with `visibility: "visible"`
@@ -146,6 +174,8 @@ You receive:
    - riskLevel, riskSignals
    - contextInheritance (projectRef, projectIntentSha256, contextSnapshotHash, staleIfChanged, stalenessStatus, stalenessPolicy — set in step 3.5)
    - `ambiguityCandidates`, `contradictionsFound`, `clarificationDecisions`, `assumptionProvenance` — typed structured arrays from critique passes (step 3.6); omit for low-risk contracts
+   - `removals` — array of removal entries (step 3.7.5); omit if no removals
+   - `cleanupObligations` — array of cleanup obligation entries (step 3.7.5); omit if no obligations
    - `readinessForPlanning` — object with `verdict` (`"go"` or `"no-go"`) and `summary`; omit for low-risk contracts
    - `implementationStrategy` — object with `taskType` and `guidance` from step 3.7 (always include)
 5. **Detect lineage** (if `.signum/contracts/index.json` exists):

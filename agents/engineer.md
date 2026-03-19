@@ -50,10 +50,38 @@ Read `.signum/contract-engineer.json`. Extract:
 
 Read `.signum/baseline.json` (written by orchestrator). Note any pre-existing failures -- you are NOT responsible for fixing them, but you MUST NOT introduce new ones.
 
+### Step 2.5: Execute removals (v3.8)
+
+If the contract has a `removals` array:
+
+1. For each removal entry (sorted by id):
+   - If `type` is `"directory"`: delete the entire directory (`rm -rf <path>`)
+   - If `type` is `"file"`: delete the file (`rm -f <path>`)
+   - Verify the path no longer exists
+   - If `preventReintroduction` is true: note this path — do NOT recreate it during implementation
+2. If `modulesYamlTransition` is set and `modules.yaml` exists at project root:
+   - Update the module's `status` field accordingly (e.g., `deprecated` → `removed`)
+   - If transitioning to `removed`, add `removed_since: <today's date>` (informational)
+
+Removals happen BEFORE implementation to ensure clean state.
+
+### Step 2.6: Execute cleanup obligations (v3.8)
+
+If the contract has a `cleanupObligations` array:
+
+1. For each obligation (sorted by id):
+   - Read the `action` and `description`
+   - Execute the cleanup: update imports, remove references, update docs/config as described
+   - Run the obligation's `verify` steps using the DSL runner
+   - If verify fails and `blocking` is true: treat as an AC failure (enters repair loop)
+   - If verify fails and `blocking` is false: log warning but continue
+2. Obligations are part of the repair loop — if they fail, the engineer gets up to 3 attempts to fix them
+
 ### Step 3: Implement changes
 
 Write the code to satisfy ALL acceptance criteria. Follow these rules:
 - Touch ONLY files in `inScope` (or new files within `allowNewFilesUnder` directories)
+- Removal targets from `removals` array are also allowed as deletion targets
 - Do NOT touch files in `outOfScope`
 - Write tests if acceptance criteria require them
 - Follow existing code style and conventions

@@ -34,6 +34,8 @@ Read these files:
    - ANY reviewer verdict is "REJECT"
    - ANY reviewer found a CRITICAL severity finding
    - Policy scan (`policy_scan.json`) has `summaryCounts.critical` > 0 (CRITICAL policy finding present)
+   - Any blocking `cleanupObligation` verify failed (v3.8)
+   - Any `removal` with `preventReintroduction: true` has its path still existing (v3.8)
 
 2. **AUTO_OK** if ALL of:
    - Mechanic report has no regressions (`hasRegressions: false`)
@@ -125,6 +127,21 @@ After decision and evidence coverage, compute `releaseVerdict` — a downstream 
 `releaseVerdict` lives alongside `decision`, never replaces it. `decision` is the audit outcome, `releaseVerdict` is the release policy recommendation.
 
 ## Output
+
+### Removal and Obligation Verification (v3.8)
+
+When the contract has `removals` or `cleanupObligations` arrays, add these sections to audit_summary.json:
+
+**removalVerification**: For each removal entry, verify:
+- The path no longer exists on disk
+- If `preventReintroduction` is true, grep the codebase for imports/references to the removed path
+- Record: `{ "id": "RM01", "path": "...", "removed": true|false, "orphanReferences": 0 }`
+
+**obligationVerification**: For each cleanup obligation, verify:
+- Run the obligation's `verify` steps
+- Record: `{ "id": "CO01", "action": "...", "fulfilled": true|false, "blocking": true|false }`
+
+If any blocking obligation is unfulfilled, set decision to AUTO_BLOCK with reasoning.
 
 Write `.signum/audit_summary.json`:
 
