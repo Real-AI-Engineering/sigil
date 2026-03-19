@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "3.8",
+  "contractId": "sig-20260319-e1a2",
+  "status": "draft",
+  "timestamps": {
+    "createdAt": "2026-03-19T10:00:00Z"
+  },
+  "goal": "Remove deprecated old-auth module and migrate all imports to the new OAuth2 auth module",
+  "inScope": [
+    "src/auth/",
+    "src/api/middleware.py",
+    "src/api/routes.py",
+    "modules.yaml"
+  ],
+  "outOfScope": [
+    "src/api/views.py",
+    "tests/"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "AC01",
+      "description": "All imports from src/old-auth/ are replaced with imports from src/auth/",
+      "visibility": "visible",
+      "verify": {
+        "steps": [
+          {"exec": {"argv": ["grep", "-r", "from old_auth", "src/"]}, "capture": "chk"},
+          {"expect": {"source": "chk", "exit_code": 1}}
+        ],
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "AC02",
+      "description": "The old-auth directory no longer exists",
+      "visibility": "visible",
+      "verify": {
+        "steps": [
+          {"expect": {"file_not_exists": "src/old-auth/"}}
+        ],
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "AC03",
+      "description": "modules.yaml shows old-auth as removed",
+      "visibility": "visible",
+      "verify": {
+        "steps": [
+          {"exec": {"argv": ["grep", "status: removed", "modules.yaml"]}, "capture": "yml"},
+          {"expect": {"source": "yml", "exit_code": 0}}
+        ],
+        "timeout_ms": 5000
+      }
+    }
+  ],
+  "removals": [
+    {
+      "id": "RM01",
+      "path": "src/old-auth/",
+      "reason": "Replaced by OAuth2 implementation in src/auth/",
+      "type": "directory",
+      "replacedBy": "src/auth/",
+      "preventReintroduction": true,
+      "modulesYamlTransition": "deprecated_to_removed"
+    }
+  ],
+  "cleanupObligations": [
+    {
+      "id": "CO01",
+      "action": "update_imports",
+      "target": "src/**/*.py",
+      "description": "Remove all imports of src/old-auth/ modules",
+      "blocking": true,
+      "verify": {
+        "steps": [
+          {"exec": {"argv": ["grep", "-r", "from old_auth", "src/"]}, "capture": "chk"},
+          {"expect": {"source": "chk", "exit_code": 1}}
+        ],
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "CO02",
+      "action": "update_docs",
+      "target": "docs/**/*.md",
+      "description": "Update documentation references from old-auth to auth",
+      "blocking": false,
+      "verify": {
+        "steps": [
+          {"exec": {"argv": ["grep", "-r", "old-auth", "docs/"]}, "capture": "dchk"},
+          {"expect": {"source": "dchk", "exit_code": 1}}
+        ],
+        "timeout_ms": 10000
+      }
+    }
+  ],
+  "assumptions": [
+    {"id": "A1", "text": "src/auth/ is the complete replacement for src/old-auth/"},
+    {"id": "A2", "text": "No external services depend on old-auth module paths"}
+  ],
+  "riskLevel": "medium",
+  "riskSignals": ["auth module replacement", "import migration across multiple files"],
+  "implementationStrategy": {
+    "taskType": "refactor",
+    "guidance": "Delete old-auth directory first, then fix all import errors systematically"
+  },
+  "requiredInputsProvided": true
+}
