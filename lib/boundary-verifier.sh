@@ -204,9 +204,22 @@ CONTRACT_ENGINEER="${CONTRACT_ENGINEER:-$ABS_SIGNUM_DIR/contract-engineer.json}"
 CONTRACT_FULL="${CONTRACT_FULL:-$ABS_SIGNUM_DIR/contract.json}"
 SNAPSHOT_JSON="${SNAPSHOT_JSON:-$ABS_SIGNUM_DIR/snapshots/pre-execute.json}"
 EXECUTION_CONTEXT="${EXECUTION_CONTEXT:-$ABS_SIGNUM_DIR/execution_context.json}"
-DSL_RUNNER="$ABS_WORKSPACE/lib/dsl-runner.sh"
-if [[ ! -x "$DSL_RUNNER" && -x "$ABS_SIGNUM_DIR/../lib/dsl-runner.sh" ]]; then
-  DSL_RUNNER="$ABS_SIGNUM_DIR/../lib/dsl-runner.sh"
+# Resolve dsl-runner.sh from trusted Signum install roots only.
+# Do NOT trust workspace-local copies — a compromised project could supply a
+# dsl-runner.sh that passes all AC checks regardless of actual result.
+DSL_RUNNER=""
+_REAL_HOME_BV="${HOME}"
+for _d in \
+  "${_REAL_HOME_BV}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME_BV}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME_BV}/.nex/plugins/signum/platforms/claude-code"; do
+  [[ -x "${_d}/lib/dsl-runner.sh" ]] || continue
+  DSL_RUNNER="${_d}/lib/dsl-runner.sh"
+  break
+done
+# Fallback: if running from tests or local dev, allow workspace-local dsl-runner
+if [[ -z "$DSL_RUNNER" && -x "$ABS_WORKSPACE/lib/dsl-runner.sh" ]]; then
+  DSL_RUNNER="$ABS_WORKSPACE/lib/dsl-runner.sh"
 fi
 
 for required in "$CONTRACT_ENGINEER" "$CONTRACT_FULL" "$SNAPSHOT_JSON" "$DSL_RUNNER"; do

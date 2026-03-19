@@ -191,12 +191,25 @@ scenario_chain_growth() {
   [[ "$parent" == "$first_hash" ]]
 }
 
+scenario_out_of_scope_addition() {
+  local dir
+  dir=$(make_repo)
+  write_contract_pair "$dir" "medium" ""
+  (cd "$dir" && lib/snapshot-tree.sh pre-execute >/dev/null)
+  simulate_engineer_success "$dir" "hello world"
+  # Add an out-of-scope file that the engineer should not have created
+  mkdir -p "$dir/docs"
+  printf 'rogue file\n' > "$dir/docs/secret.md"
+  (cd "$dir" && lib/boundary-verifier.sh execute >/dev/null)
+}
+
 echo "=== Receipt chain tests ==="
 assert_ok "happy path generates PASS receipt and transition gate passes" scenario_happy_path
 assert_fail "transition gate blocks when execute receipt is missing" scenario_bypass_detected
 assert_fail "boundary verifier blocks when an inScope path is still missing" scenario_missing_scope
 assert_fail "boundary verifier blocks vacuous verify commands on medium risk" scenario_vacuous_verify
 assert_ok "iterative attempts append receipt chain with parent hash linkage" scenario_chain_growth
+assert_fail "boundary verifier blocks out-of-scope file additions" scenario_out_of_scope_addition
 
 echo ""
 echo "Passed: $passed"
