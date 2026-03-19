@@ -141,6 +141,16 @@ if [ -f "$ADDITIONS_FILE" ]; then
         esac
       fi
 
+      # incomplete_implementation patterns: skip non-code files (docs, tests, configs, examples)
+      if [ "$p_name" = "incomplete_implementation" ]; then
+        case "$f_file" in
+          *.md|*.txt|*.rst|*.yml|*.yaml|*.toml|*.json|*.xml) continue ;;
+        esac
+        case "$f_file" in
+          docs/*|examples/*|fixtures/*|*.example|*.sample) continue ;;
+        esac
+      fi
+
       if printf '%s\n' "$f_content" | grep -qE -- "$p_regex"; then
         # Emit one JSON object per line — no array rebuild on each hit
         jq -n \

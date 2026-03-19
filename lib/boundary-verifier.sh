@@ -113,6 +113,14 @@ path_allowed() {
     [[ -z "$raw" ]] && continue
     entry=$(normalize_scope_entry "$raw")
     [[ -z "$entry" ]] && continue
+    # Glob entries: evaluate with bash pattern matching
+    if is_glob_like "$entry"; then
+      # shellcheck disable=SC2254
+      case "$path" in
+        $entry ) return 0 ;;
+      esac
+      continue
+    fi
     case "$entry" in
       */)
         case "$path" in
