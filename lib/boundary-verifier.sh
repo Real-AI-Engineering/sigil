@@ -266,10 +266,13 @@ trap 'rm -f "$CURRENT_MANIFEST"; rm -rf "$AC_OBJ_DIR"' EXIT
 write_manifest "$CURRENT_MANIFEST"
 OBSERVED_TREE_HASH="sha256:$(hash_file "$CURRENT_MANIFEST")"
 
-# Build scope allow-list once.
+# Build scope allow-lists. inScope covers all change types; allowNewFilesUnder covers ONLY additions.
 IN_SCOPE_NL=$(jq -r '.inScope[]? // empty' "$CONTRACT_FULL")
 ALLOW_NEW_NL=$(jq -r '.allowNewFilesUnder[]? // empty' "$CONTRACT_FULL")
+# Full allow-list includes both (used for added files)
 ALLOWED_PATHS_NL=$(printf '%s\n%s\n' "$IN_SCOPE_NL" "$ALLOW_NEW_NL" | sed '/^$/d')
+# Strict allow-list excludes allowNewFilesUnder (used for modified/deleted files)
+ALLOWED_PATHS_STRICT_NL=$(printf '%s\n' "$IN_SCOPE_NL" | sed '/^$/d')
 
 # Diff manifests against snapshot.
 mapfile -t DIFF_ROWS < <(join -t $'\t' -a1 -a2 -e '__MISSING__' -o 0,1.2,2.2 "$SNAPSHOT_MANIFEST" "$CURRENT_MANIFEST")
@@ -291,13 +294,28 @@ for row in "${DIFF_ROWS[@]}"; do
   CHANGED_PATHS+=("$path")
   if [[ "$before_hash" == '__MISSING__' ]]; then
     ADDED_PATHS+=("$path")
+    # Added files: allowed by both inScope and allowNewFilesUnder
+    if ! path_allowed "$path"; then
+      OUT_OF_SCOPE+=("$path")
+    fi
   elif [[ "$after_hash" == '__MISSING__' ]]; then
     DELETED_PATHS+=("$path")
+    # Deleted/modified files: only allowed by inScope (not allowNewFilesUnder)
+    _saved_allowed="$ALLOWED_PATHS_NL"
+    ALLOWED_PATHS_NL="$ALLOWED_PATHS_STRICT_NL"
+    if ! path_allowed "$path"; then
+      OUT_OF_SCOPE+=("$path")
+    fi
+    ALLOWED_PATHS_NL="$_saved_allowed"
   else
     MODIFIED_PATHS+=("$path")
-  fi
-  if ! path_allowed "$path"; then
-    OUT_OF_SCOPE+=("$path")
+    # Deleted/modified files: only allowed by inScope (not allowNewFilesUnder)
+    _saved_allowed="$ALLOWED_PATHS_NL"
+    ALLOWED_PATHS_NL="$ALLOWED_PATHS_STRICT_NL"
+    if ! path_allowed "$path"; then
+      OUT_OF_SCOPE+=("$path")
+    fi
+    ALLOWED_PATHS_NL="$_saved_allowed"
   fi
 done
 

@@ -104,6 +104,9 @@ cp "${DIR}approval.json" "$ARCHIVE_DIR" 2>/dev/null || true
 # Copy audit summary if present
 cp "${DIR}audit_summary.json" "$ARCHIVE_DIR" 2>/dev/null || true
 
+# Copy receipt chain artifacts (execute receipt is audit evidence)
+cp "${DIR}receipts/execute.json" "$ARCHIVE_DIR" 2>/dev/null || true
+
 # Purge intermediate artifacts (reviews, baseline, holdout, execute_log, prompts)
 rm -rf "${DIR}reviews/" 2>/dev/null || true
 rm -rf "${DIR}iterations/" 2>/dev/null || true
