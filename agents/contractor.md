@@ -34,6 +34,16 @@ You receive:
    - Note any deprecated/removed modules and their `replaced_by`, `remove_after` fields
    - Use this information in step 3.7 (cleanup detection) and step 3.7.5 (removal extraction)
    - If not found: continue without module lifecycle context
+1.8. **Read jj-supersede signals** (before scan, optional):
+   - Check if `PROJECT_ROOT/.jj/` exists (jj-managed repository)
+   - If not a jj repo: skip entirely
+   - Check if `jj-supersede` is available: `command -v jj-supersede`
+   - If not installed: skip (no error)
+   - Run: `jj-supersede report --json -t 0.7 -n 20 -C PROJECT_ROOT 2>/dev/null`
+   - If output contains `"count": 0` or command fails: skip
+   - If superseded functions found: store as `_jjSupersede` signal for use in step 3.7.5
+   - Each entry has: `path`, `function_name`, `score`, `old_commit`, `new_commit`, `change_id`
+   - These are ghost solutions — functions that compile and have tests but are semantically replaced
 2. **Scan codebase** (deterministic):
    - `find` / `tree` to understand project structure
    - `grep` for relevant files matching the feature description
@@ -140,6 +150,19 @@ You receive:
      - `target`: glob pattern for files that might reference the removed code
      - `verify`: DSL steps using `grep` (exec) + `expect` (exit_code: 1) to confirm no references remain
      - `blocking`: true (references to removed code must be cleaned up)
+   - **jj-supersede auto-removals** (when `_jjSupersede` signal exists from step 1.8):
+     - For each superseded function with score >= 0.7, generate a `removals` entry:
+       - `id`: RM-JJ01, RM-JJ02, ...
+       - `path`: the file containing the superseded function
+       - `reason`: "Function `<name>` superseded (score <score>, change <change_id>)"
+       - `type`: "function"
+       - `supersededBy`: "See jj evolog <change_id> for replacement"
+     - For each, auto-generate a `cleanupObligations` entry:
+       - `action`: "remove_code"
+       - `target`: "<path>:<function_name>"
+       - `description`: "Remove ghost function detected by jj-supersede"
+       - `blocking`: false (ghost removal is advisory, not blocking)
+     - These are merged with any user-requested removals (user removals take priority on conflict)
    - Validate: removal paths must exist (for files/dirs being removed), no overlap with `inScope` paths
    - If `modules.yaml` exists, add obligation to update module status in `modules.yaml`
 4. **Generate contract.json** with:
