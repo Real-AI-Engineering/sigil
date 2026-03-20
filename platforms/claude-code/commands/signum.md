@@ -449,6 +449,34 @@ echo "Archived contract.json to ${CDIR}contract.json"
 register_contract "$CONTRACT_ID" "draft"
 ```
 
+### Step 1.2.7: Module lifecycle check (informational, non-blocking)
+
+If `modules.yaml` exists in the project root, check for superseded/deprecated modules that overlap with inScope:
+
+```bash
+_SIGNUM_MODULES=""
+for _d in \
+  "${HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/modules-check.sh" ] || continue
+  _SIGNUM_MODULES="${_d}/lib/modules-check.sh"
+  break
+done
+if [ -n "$_SIGNUM_MODULES" ]; then
+  MODULES_RESULT=$(bash "$_SIGNUM_MODULES" --project-root "${PROJECT_ROOT:-$PWD}" 2>/dev/null || echo '{"status":"error"}')
+  MODULES_WARNINGS=$(echo "$MODULES_RESULT" | jq '.warnings | length')
+  if [ "$MODULES_WARNINGS" -gt 0 ]; then
+    echo "Module lifecycle warnings ($MODULES_WARNINGS):"
+    echo "$MODULES_RESULT" | jq -r '.warnings[] | "  [\(.level)] \(.path): \(.message)"'
+  else
+    echo "Module lifecycle: clean ($(echo "$MODULES_RESULT" | jq '.modules_total') modules)"
+  fi
+fi
+```
+
+Module lifecycle warnings are informational — they do not block the pipeline. They are displayed in Step 1.4 (contract summary) if present.
+
 ### Step 1.3: Check for open questions
 
 Use the Bash tool:
