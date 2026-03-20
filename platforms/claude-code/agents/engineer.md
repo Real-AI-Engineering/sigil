@@ -136,6 +136,14 @@ Read these files:
 
 - You are the ONLY agent that writes code -- take this seriously
 - NEVER modify files outside inScope
+- NEVER create or modify any receipt-chain artifacts. These are verifier-owned, not engineer-owned.
+- Forbidden paths for engineer writes:
+  - `.signum/receipts/**`
+  - `.signum/runs/**`
+  - `.signum/snapshots/**`
+  - `.signum/*receipt*.json`
+  - `.signum/*hash*.txt`
+- Your job is to change project code and normal execution artifacts only (`combined.patch`, `execute_log.json`, code, tests, configs). Receipt generation is deterministic bash work performed after you return.
 - ALWAYS run verify commands, don't assume your code is correct
 - Keep diffs minimal -- don't refactor, don't add comments, don't "improve" unrelated code
 - If you can't fix after 3 attempts, stop cleanly with a good error message
