@@ -398,7 +398,22 @@ jq -e '.schemaVersion and .goal and .inScope and .acceptanceCriteria and .riskLe
   .signum/contract.json > /dev/null && echo "VALID" || echo "INVALID"
 ```
 
-If the file is missing or INVALID, stop and report: "Contractor agent failed to produce a valid contract.json. Check agent output for errors."
+If the file is missing, retry ONCE before failing:
+
+1. Re-launch the "contractor" agent with model `sonnet` and this prompt:
+```
+FEATURE_REQUEST: <same task from $ARGUMENTS>
+PROJECT_ROOT: <output of pwd>
+
+CRITICAL: The previous contractor run failed to produce contract.json.
+Stop scanning. Write .signum/contract.json NOW with whatever information you have.
+If uncertain, use openQuestions array and set requiredInputsProvided: false.
+You MUST call the Write tool before finishing.
+```
+
+2. Re-run the validation check above.
+
+If the file is STILL missing or INVALID after retry, stop and report: "Contractor agent failed to produce a valid contract.json after 2 attempts (haiku + sonnet). Check agent output for errors."
 
 ### Step 1.2.5: Initialize per-contract directory
 
