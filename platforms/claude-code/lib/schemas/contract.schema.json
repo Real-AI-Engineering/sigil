@@ -9,7 +9,7 @@
     "required": ["contractId", "status", "timestamps"]
   },
   "properties": {
-    "schemaVersion": { "type": "string", "enum": ["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] },
+    "schemaVersion": { "type": "string", "enum": ["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"] },
     "glossaryVersion": { "type": "string", "description": "Version string from project.glossary.json at contract creation time" },
     "contractId": { "type": "string", "pattern": "^sig-.+" },
     "status": {
@@ -334,6 +334,73 @@
         "guidance": { "type": "string", "minLength": 1 }
       },
       "description": "Task-type-specific process guidance for the Engineer; optional, informational only"
+    },
+    "cleanupObligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action", "target", "description"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["update_roadmap", "update_memory", "update_status", "update_docs", "remove_code", "update_manifest"],
+            "description": "Type of cleanup action required"
+          },
+          "target": {
+            "type": "string",
+            "description": "File path or identifier of the target to update/remove"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what needs to be done"
+          },
+          "blocking": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, PACK will not complete until this obligation is resolved"
+          },
+          "resolvedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Timestamp when obligation was resolved (null = pending)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Post-implementation obligations that must be resolved before the contract is complete (Kubernetes Finalizer pattern)"
+    },
+    "removals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason", "type"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File or module path to be removed"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this code/file should be removed (e.g. 'Replaced by src/new_module.rs')"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["file", "module", "function", "class", "route", "dependency"],
+            "description": "Granularity of the removal"
+          },
+          "supersededBy": {
+            "type": "string",
+            "description": "Path or identifier of the replacement"
+          },
+          "removeAfter": {
+            "type": "string",
+            "format": "date",
+            "description": "Deadline for removal (feature flag time-bomb pattern)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Code/artifacts that should be removed as part of this change (OpenSpec REMOVED pattern)"
     }
   }
 }

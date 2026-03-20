@@ -3129,6 +3129,121 @@ fi
 
 ---
 
+## Phase 5: RECONCILE
+
+**Goal:** Resolve post-implementation obligations and update project state. Runs only when `cleanupObligations` is present and non-empty in the contract, AND the audit decision is `AUTO_OK`.
+
+**Skip if:** `cleanupObligations` is absent/empty, OR decision is `AUTO_BLOCK` or `HUMAN_REVIEW`.
+
+### Step 5.1: Check obligations
+
+Use the Bash tool:
+
+```bash
+OBLIGATIONS=$(jq -r '.cleanupObligations // [] | length' .signum/contract.json)
+DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+if [ "$OBLIGATIONS" -eq 0 ] || [ "$DECISION" != "AUTO_OK" ]; then
+  echo "RECONCILE skipped (obligations=$OBLIGATIONS, decision=$DECISION)"
+else
+  echo "RECONCILE: $OBLIGATIONS obligation(s) to resolve"
+  jq -r '.cleanupObligations[] | "  - [\(.action)] \(.target): \(.description)"' .signum/contract.json
+fi
+```
+
+If skipped, proceed directly to Final Output.
+
+### Step 5.2: Resolve obligations
+
+Use the Agent tool to launch a general-purpose agent (model: sonnet) with this prompt:
+
+```
+You are the RECONCILE agent for Signum. Your job is to resolve cleanup obligations after a successful implementation.
+
+Read .signum/contract.json — the cleanupObligations array lists what needs to be done.
+Read .signum/proofpack.json — the summary field describes what was implemented.
+
+For each obligation:
+
+1. action=update_roadmap: Read the target file (e.g. docs/roadmap.md). Find items that correspond to the implemented acceptance criteria (from contract.json). Mark them as done ([x]). Do NOT change items unrelated to this contract.
+
+2. action=update_status: Read the target file. Update the status/version field to reflect completion. Minimal change only.
+
+3. action=update_docs: Read the target file. Update descriptions that reference the changed modules. Minimal change — only fix what is now inaccurate.
+
+4. action=remove_code: Check if the target path still exists and is no longer imported/used. If safe to remove, delete it. If still referenced, add a TODO comment instead.
+
+5. action=update_manifest: Read the target file and update lifecycle/status fields.
+
+After resolving each obligation, report what you did.
+Write a summary to .signum/reconcile_report.json:
+{
+  "obligations_total": N,
+  "resolved": N,
+  "skipped": N,
+  "details": [
+    {"action": "...", "target": "...", "status": "resolved|skipped", "what_changed": "..."}
+  ]
+}
+```
+
+### Step 5.3: Verify resolution
+
+Use the Bash tool:
+
+```bash
+if [ ! -f .signum/reconcile_report.json ]; then
+  echo "WARNING: reconcile_report.json missing — RECONCILE agent may have failed"
+else
+  RESOLVED=$(jq '.resolved' .signum/reconcile_report.json)
+  TOTAL=$(jq '.obligations_total' .signum/reconcile_report.json)
+  SKIPPED=$(jq '.skipped' .signum/reconcile_report.json)
+  echo "RECONCILE: $RESOLVED/$TOTAL resolved, $SKIPPED skipped"
+  jq -r '.details[] | "  [\(.status)] \(.action) \(.target): \(.what_changed)"' .signum/reconcile_report.json
+
+  # Update contract: mark resolved obligations
+  RECONCILE_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  jq --arg ts "$RECONCILE_TS" \
+    '(.cleanupObligations // []) |= [.[] | . + {resolvedAt: $ts}] | .timestamps.reconciledAt = $ts' \
+    .signum/contract.json > .signum/contract-tmp.json && \
+    mv .signum/contract-tmp.json .signum/contract.json
+fi
+```
+
+### Step 5.4: Write retrospective (medium/high risk only)
+
+**Skip for low risk.**
+
+Use the Bash tool:
+
+```bash
+RISK=$(jq -r '.riskLevel' .signum/contract.json)
+if [ "$RISK" = "low" ]; then
+  echo "Retro skipped (low risk)"
+else
+  INSCOPE_COUNT=$(jq '.inScope | length' .signum/contract.json)
+  CHANGED_COUNT=$(git diff --name-only | wc -l | tr -d ' ')
+  ATTEMPTS=$(jq -r '.totalAttempts // "?"' .signum/execute_log.json)
+  ITERATIONS=$(jq -r '.iterationsUsed // 1' .signum/audit_summary.json)
+  FINDINGS=$(jq '[.reviews[].findings[]?] | length' .signum/audit_summary.json 2>/dev/null || echo 0)
+
+  cat > .signum/retro.json << RETRO
+{
+  "estimated_files": $INSCOPE_COUNT,
+  "actual_files": $CHANGED_COUNT,
+  "scope_accuracy": "$(echo "scale=2; $INSCOPE_COUNT / ($CHANGED_COUNT + 0.001)" | bc 2>/dev/null || echo "?")",
+  "execute_attempts": $ATTEMPTS,
+  "audit_iterations": $ITERATIONS,
+  "total_findings": $FINDINGS,
+  "risk_level": "$RISK",
+  "risk_accurate": $([ "$INSCOPE_COUNT" -le 15 ] && [ "$RISK" != "high" ] && echo true || echo false)
+}
+RETRO
+  echo "Retro written: estimated=$INSCOPE_COUNT actual=$CHANGED_COUNT attempts=$ATTEMPTS iterations=$ITERATIONS findings=$FINDINGS"
+fi
+```
+
+---
+
 ## Final Output
 
 Display to the user:
@@ -3142,6 +3257,9 @@ echo ""
 echo "Decision:   $(jq -r .decision .signum/proofpack.json)"
 echo "Confidence: $(jq -r '.confidence.overall' .signum/proofpack.json)%"
 echo "Run ID:     $(jq -r .runId   .signum/proofpack.json)"
+if [ -f .signum/reconcile_report.json ]; then
+  echo "Reconcile: $(jq '.resolved' .signum/reconcile_report.json)/$(jq '.obligations_total' .signum/reconcile_report.json) obligations resolved"
+fi
 ```
 
 Then display the appropriate next steps based on the decision:

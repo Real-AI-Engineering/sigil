@@ -118,7 +118,7 @@ You receive:
    - `contractId`: unique identifier in format `sig-YYYYMMDD-<4char-hash>` where YYYYMMDD is the UTC date and the 4-char hash is the first 4 hex characters of the SHA-1 of the goal string. Example: `sig-20260313-a7f2`
    - `status`: always set to `"draft"` when generating a new contract
    - `timestamps`: object with `createdAt` set to the current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), e.g. `"2026-03-13T10:00:00Z"`
-   - `schemaVersion`: always `"3.7"` for new contracts
+   - `schemaVersion`: always `"3.8"` for new contracts
    - `glossaryVersion`: set to the `version` from `project.glossary.json` if found; omit entirely when the file is absent
    - goal, inScope, outOfScope, allowNewFilesUnder (if new files needed)
    - acceptanceCriteria with typed verify blocks (DSL format), each with `visibility: "visible"`
@@ -148,6 +148,13 @@ You receive:
    - `ambiguityCandidates`, `contradictionsFound`, `clarificationDecisions`, `assumptionProvenance` — typed structured arrays from critique passes (step 3.6); omit for low-risk contracts
    - `readinessForPlanning` — object with `verdict` (`"go"` or `"no-go"`) and `summary`; omit for low-risk contracts
    - `implementationStrategy` — object with `taskType` and `guidance` from step 3.7 (always include)
+   - `cleanupObligations` (v3.8) — array of post-implementation obligations. Auto-generate based on codebase scan:
+     - If `docs/roadmap.md` or similar exists AND inScope items map to roadmap items → add `{"action": "update_roadmap", "target": "docs/roadmap.md", "description": "Mark implemented items as done", "blocking": true}`
+     - If `project.intent.md` exists AND the goal changes project status → add `{"action": "update_status", "target": "project.intent.md", "description": "Update project status/version", "blocking": false}`
+     - If the change replaces existing code (refactor, migration) → add `{"action": "remove_code", "target": "<old_path>", "description": "Remove superseded implementation", "blocking": true}`
+     - If `CLAUDE.md` or `AGENTS.md` describes modules being changed → add `{"action": "update_docs", "target": "CLAUDE.md", "description": "Update module descriptions", "blocking": false}`
+     - Empty array is valid (no obligations detected). Omit the field entirely only for low-risk contracts with no detectable obligations.
+   - `removals` (v3.8) — array of code/artifacts to be removed as part of this change. Only populate when the goal explicitly involves replacing, migrating, or deprecating existing code. Each entry: `{"path": "src/old.rs", "reason": "Replaced by src/new.rs", "type": "file|module|function", "supersededBy": "src/new.rs"}`. Empty array or omitted when no removals needed.
 5. **Detect lineage** (if `.signum/contracts/index.json` exists):
    - Read completed/archived contracts from index.json
    - For each, check if their inScope files overlap with the new contract's inScope
