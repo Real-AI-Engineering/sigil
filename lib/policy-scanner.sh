@@ -147,7 +147,10 @@ if [ -f "$ADDITIONS_FILE" ]; then
           *.md|*.txt|*.rst|*.yml|*.yaml|*.toml|*.json|*.xml) continue ;;
         esac
         case "$f_file" in
-          docs/*|examples/*|fixtures/*|tests/*|test/*|*_test.go|*_test.py|*.test.ts|*.test.js|*.spec.ts|*.spec.js|*.example|*.sample) continue ;;
+          docs/*|examples/*|fixtures/*|tests/*|test/*|*.example|*.sample) continue ;;
+        esac
+        case "$f_basename" in
+          *_test.*|*.test.*|*.spec.*|test_*.*|*_spec.*) continue ;;
         esac
       fi
 

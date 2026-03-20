@@ -2482,6 +2482,30 @@ cp "$WINNER_DIR/audit_summary.json" .signum/audit_summary.json 2>/dev/null || tr
 Boundary verification must run while the winner worktree still exists — it needs the live workspace to verify file hashes, scope integrity, and AC evidence. Pruning worktrees before verification would cause the verifier to run against stale main checkout.
 
 ```bash
+# Re-resolve receipt chain scripts (variables may not persist across Bash tool calls)
+if [ -z "${_SIGNUM_BOUNDARY:-}" ]; then
+  for _d in \
+    "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+    "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+    "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+    [ -f "${_d}/lib/boundary-verifier.sh" ] || continue
+    _SIGNUM_BOUNDARY="${_d}/lib/boundary-verifier.sh"; break
+  done
+fi
+if [ -z "${_SIGNUM_TRANSITION:-}" ]; then
+  for _d in \
+    "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+    "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+    "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+    [ -f "${_d}/lib/transition-verifier.sh" ] || continue
+    _SIGNUM_TRANSITION="${_d}/lib/transition-verifier.sh"; break
+  done
+fi
+if [ -z "${_SIGNUM_BOUNDARY:-}" ] || [ -z "${_SIGNUM_TRANSITION:-}" ]; then
+  echo "ERROR: receipt chain scripts not found — cannot proceed with repair verification" >&2
+  exit 1
+fi
+
 RECEIPT_CHAIN_OK=true
 if [ -n "${_SIGNUM_BOUNDARY:-}" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$ITER_NUM")
@@ -2494,11 +2518,14 @@ if [ -n "${_SIGNUM_BOUNDARY:-}" ]; then
     echo "BOUNDARY_BLOCK: repair attempt $ITER_NUM failed boundary verification"
     RECEIPT_CHAIN_OK=false
   fi
-  # Copy receipt from winner worktree to root .signum
+  # Copy receipt from winner worktree to root .signum (specific run_id only)
+  _CURRENT_RUN_ID=$(jq -r '.run_id // empty' .signum/execution_context.json)
+  mkdir -p ".signum/receipts" ".signum/runs/$_CURRENT_RUN_ID"
   cp "$WINNER_DIR/.signum/receipts/execute.json" .signum/receipts/execute.json 2>/dev/null || true
-  mkdir -p ".signum/runs/$(jq -r '.run_id // empty' .signum/execution_context.json)"
-  cp "$WINNER_DIR/.signum/runs/"*"/execute-"*.json \
-    ".signum/runs/$(jq -r '.run_id // empty' .signum/execution_context.json)/" 2>/dev/null || true
+  if [ -d "$WINNER_DIR/.signum/runs/$_CURRENT_RUN_ID" ]; then
+    cp "$WINNER_DIR/.signum/runs/$_CURRENT_RUN_ID/execute-"*.json \
+      ".signum/runs/$_CURRENT_RUN_ID/" 2>/dev/null || true
+  fi
 fi
 if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "${_SIGNUM_TRANSITION:-}" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$ITER_NUM")
