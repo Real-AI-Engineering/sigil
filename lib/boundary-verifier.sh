@@ -217,8 +217,10 @@ for _d in \
   DSL_RUNNER="${_d}/lib/dsl-runner.sh"
   break
 done
-# Fallback: if running from tests or local dev, allow workspace-local dsl-runner
-if [[ -z "$DSL_RUNNER" && -x "$ABS_WORKSPACE/lib/dsl-runner.sh" ]]; then
+# Fallback for test environments: allow workspace-local dsl-runner only when
+# SIGNUM_TRUST_LOCAL=1 is explicitly set (e.g. by test harness).
+# Production installs MUST resolve from trusted paths above.
+if [[ -z "$DSL_RUNNER" && "${SIGNUM_TRUST_LOCAL:-}" == "1" && -x "$ABS_WORKSPACE/lib/dsl-runner.sh" ]]; then
   DSL_RUNNER="$ABS_WORKSPACE/lib/dsl-runner.sh"
 fi
 

@@ -1316,11 +1316,11 @@ for _d in \
   break
 done
 if [ -z "$_SIGNUM_SNAPSHOT" ]; then
-  echo "WARNING: snapshot-tree.sh not found — receipt chain disabled"
-else
-  bash "$_SIGNUM_SNAPSHOT" execute-attempt-01
-  echo "Pre-execute snapshot captured"
+  echo "ERROR: snapshot-tree.sh not found in Signum plugin directories — receipt chain cannot be disabled" >&2
+  exit 1
 fi
+bash "$_SIGNUM_SNAPSHOT" execute-attempt-01
+echo "Pre-execute snapshot captured"
 ```
 
 ### Step 2.1: Launch Engineer
@@ -1487,11 +1487,11 @@ for _d in \
   break
 done
 if [ -z "$_SIGNUM_BOUNDARY" ]; then
-  echo "WARNING: boundary-verifier.sh not found — receipt chain disabled, proceeding without boundary verification"
-else
-  bash "$_SIGNUM_BOUNDARY" execute \
-    --snapshot .signum/snapshots/execute-attempt-01.json
+  echo "ERROR: boundary-verifier.sh not found in Signum plugin directories" >&2
+  exit 1
 fi
+bash "$_SIGNUM_BOUNDARY" execute \
+  --snapshot .signum/snapshots/execute-attempt-01.json
 ```
 
 If boundary verifier exits non-zero, **STOP**. Do not proceed to Phase 3.
@@ -1511,11 +1511,11 @@ for _d in \
   break
 done
 if [ -z "$_SIGNUM_TRANSITION" ]; then
-  echo "WARNING: transition-verifier.sh not found — receipt chain disabled, proceeding without transition verification"
-else
-  bash "$_SIGNUM_TRANSITION" execute audit \
-    --snapshot .signum/snapshots/execute-attempt-01.json
+  echo "ERROR: transition-verifier.sh not found in Signum plugin directories" >&2
+  exit 1
 fi
+bash "$_SIGNUM_TRANSITION" execute audit \
+  --snapshot .signum/snapshots/execute-attempt-01.json
 ```
 
 If transition verifier exits non-zero, **STOP**. Do not proceed to Phase 3.
@@ -2475,25 +2475,30 @@ cp "$WINNER_DIR/holdout_report.json" .signum/holdout_report.json 2>/dev/null || 
 mkdir -p .signum/reviews
 cp "$WINNER_DIR/reviews/"*.json .signum/reviews/ 2>/dev/null || true
 cp "$WINNER_DIR/audit_summary.json" .signum/audit_summary.json 2>/dev/null || true
-
-# Clean up worktrees now that winner artifacts are copied
-_prune_lanes
-_LANE_CLEANUP_DONE=true
 ```
 
-**Run boundary verification on winner (receipt chain):**
+**Run boundary verification on winner BEFORE pruning worktrees (receipt chain):**
 
-After copying winner artifacts, run boundary verification to generate the execute receipt for this repair attempt. Then run the transition gate before re-entering audit.
+Boundary verification must run while the winner worktree still exists — it needs the live workspace to verify file hashes, scope integrity, and AC evidence. Pruning worktrees before verification would cause the verifier to run against stale main checkout.
 
 ```bash
 RECEIPT_CHAIN_OK=true
 if [ -n "${_SIGNUM_BOUNDARY:-}" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$ITER_NUM")
   if ! bash "$_SIGNUM_BOUNDARY" execute \
+    --workspace-root "$WINNER_DIR" \
+    --signum-dir "$WINNER_DIR/.signum" \
+    --contract "$WINNER_DIR/.signum/contract-engineer.json" \
+    --contract-full "$WINNER_DIR/.signum/contract.json" \
     --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json"; then
     echo "BOUNDARY_BLOCK: repair attempt $ITER_NUM failed boundary verification"
     RECEIPT_CHAIN_OK=false
   fi
+  # Copy receipt from winner worktree to root .signum
+  cp "$WINNER_DIR/.signum/receipts/execute.json" .signum/receipts/execute.json 2>/dev/null || true
+  mkdir -p ".signum/runs/$(jq -r '.run_id // empty' .signum/execution_context.json)"
+  cp "$WINNER_DIR/.signum/runs/"*"/execute-"*.json \
+    ".signum/runs/$(jq -r '.run_id // empty' .signum/execution_context.json)/" 2>/dev/null || true
 fi
 if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "${_SIGNUM_TRANSITION:-}" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$ITER_NUM")
@@ -2505,7 +2510,14 @@ if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "${_SIGNUM_TRANSITION:-}" ]; then
 fi
 ```
 
-If `RECEIPT_CHAIN_OK` is `false`, the repair iteration's boundary evidence is incomplete. Continue to audit — the synthesizer will AUTO_BLOCK on missing or failed receipt.
+**Clean up worktrees after boundary verification:**
+
+```bash
+_prune_lanes
+_LANE_CLEANUP_DONE=true
+```
+
+If `RECEIPT_CHAIN_OK` is `false`, **STOP** the repair iteration. Do not proceed to audit — boundary enforcement is a hard gate, not an advisory.
 
 **After engineer completes, validate execute success before re-running audit:**
 

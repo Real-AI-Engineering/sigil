@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
 LIB_SRC="$ROOT_DIR/lib"
+export SIGNUM_TRUST_LOCAL=1  # allow workspace-local dsl-runner in test environments
 passed=0
 failed=0
 
@@ -179,7 +180,11 @@ scenario_chain_growth() {
   (cd "$dir" && lib/snapshot-tree.sh attempt-01 >/dev/null)
   simulate_engineer_success "$dir" "hello v1"
   (cd "$dir" && lib/boundary-verifier.sh execute --snapshot "$dir/.signum/snapshots/attempt-01.json" >/dev/null)
-  first_hash="sha256:$(sha256sum "$dir/.signum/runs/sig-20260319-test/execute-01.json" | awk '{print $1}')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    first_hash="sha256:$(sha256sum "$dir/.signum/runs/sig-20260319-test/execute-01.json" | awk '{print $1}')"
+  else
+    first_hash="sha256:$(shasum -a 256 "$dir/.signum/runs/sig-20260319-test/execute-01.json" | awk '{print $1}')"
+  fi
 
   (cd "$dir" && lib/snapshot-tree.sh attempt-02 >/dev/null)
   simulate_engineer_success "$dir" "hello v2"
