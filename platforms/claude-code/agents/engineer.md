@@ -83,9 +83,11 @@ On success:
 - Generate `.signum/combined.patch` via `git diff`
 - Write `.signum/execute_log.json` with attempt details
 
-On failure:
-- Write `.signum/execute_log.json` with all attempt errors
+On failure (any attempt fails after max retries):
+- Write `.signum/execute_log.json` with all attempt errors and `"status": "FAILED"`
 - Do NOT generate combined.patch (pipeline will stop)
+
+CRITICAL: Always write `.signum/execute_log.json` as your FIRST action after each attempt completes (before generating patch). This ensures the orchestrator can detect progress even if the agent is interrupted mid-step. Write it with current status after EVERY attempt, not only at the end.
 
 ## Output Format for execute_log.json
 

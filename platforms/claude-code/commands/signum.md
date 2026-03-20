@@ -1376,29 +1376,39 @@ jq -r '"Attempts used: " + (.totalAttempts | tostring) + "/" + (.maxAttempts | t
 Use the Bash tool to verify no out-of-scope files were modified:
 
 ```bash
-# Get changed files from patch
-CHANGED=$(git diff --name-only)
-IN_SCOPE=$(jq -r '.inScope[]' .signum/contract.json)
-ALLOW_NEW=$(jq -r '.allowNewFilesUnder // [] | .[]' .signum/contract.json)
+python3 -c "
+import json, subprocess
+changed = subprocess.run(['git', 'diff', '--name-only'], capture_output=True, text=True).stdout.strip().split('\n')
+changed = [f for f in changed if f]
+with open('.signum/contract.json') as f:
+    contract = json.load(f)
+in_scope = contract.get('inScope', [])
+allow_new = contract.get('allowNewFilesUnder', [])
 
-VIOLATIONS=""
-for file in $CHANGED; do
-  match=0
-  for pattern in $IN_SCOPE $ALLOW_NEW; do
-    case "$file" in
-      ${pattern}*) match=1; break ;;
-    esac
-  done
-  [ $match -eq 0 ] && VIOLATIONS="$VIOLATIONS\n  $file"
-done
+violations = []
+for file in changed:
+    match = False
+    # Exact match against inScope
+    if file in in_scope:
+        match = True
+    else:
+        # Prefix match against allowNewFilesUnder
+        for prefix in allow_new:
+            if file.startswith(prefix):
+                match = True
+                break
+    if not match:
+        violations.append(file)
 
-if [ -n "$VIOLATIONS" ]; then
-  echo "SCOPE VIOLATION: files outside inScope modified:$VIOLATIONS"
-  echo "Pipeline stopped. Fix scope in contract or revert changes."
-  exit 1
-else
-  echo "Scope check: PASS (all changed files within inScope)"
-fi
+if violations:
+    print('SCOPE VIOLATION: files outside inScope modified:')
+    for v in violations:
+        print(f'  {v}')
+    print('Pipeline stopped. Fix scope in contract or revert changes.')
+    exit(1)
+else:
+    print(f'Scope check: PASS ({len(changed)} files, all within inScope)')
+"
 ```
 
 If scope violation, **STOP**. Do not proceed to Phase 3.
@@ -2024,6 +2034,14 @@ if [ "$GEMINI_EXIT" != "0" ]; then
     > .signum/reviews/gemini.json
   echo "gemini: invocation failed (exit $GEMINI_EXIT), marked UNAVAILABLE"
 
+# Level 0.5: strip markdown code fences (```json ... ```) if present
+elif sed -n '1{/^```/d}; ${/^```/d}; p' .signum/reviews/gemini_raw.txt | sed 's/^```json$//' | sed 's/^```$//' > .signum/reviews/gemini_stripped.txt \
+  && jq -e '.verdict' .signum/reviews/gemini_stripped.txt > /dev/null 2>&1; then
+  cp .signum/reviews/gemini_stripped.txt .signum/reviews/gemini.json
+  rm -f .signum/reviews/gemini_stripped.txt
+  echo "gemini: parsed after stripping markdown fences"
+
+# Level 1: valid JSON directly
 elif jq -e '.verdict' .signum/reviews/gemini_raw.txt > /dev/null 2>&1; then
   cp .signum/reviews/gemini_raw.txt .signum/reviews/gemini.json
   echo "gemini: parsed as direct JSON"

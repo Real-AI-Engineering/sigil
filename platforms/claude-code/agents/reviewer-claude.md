@@ -21,19 +21,37 @@ Read these files:
 
 ## Task
 
-Follow the review template at `lib/prompts/review-template.md` exactly.
+Review the diff against the contract for bugs, security issues, logic errors, and contract compliance.
 
-Substitute the template variables:
+Read these inputs directly (do NOT look for a review template file):
 - `{contract_json}` = contents of `.signum/contract.json`
 - `{diff}` = contents of `.signum/combined.patch`
 - `{mechanic_report}` = contents of `.signum/mechanic_report.json`
 - `{iteration_delta}` = contents of `.signum/iteration_delta.patch` if it exists, otherwise empty string
+- `{review_context}` = review context JSON passed inline by the orchestrator (git history, issue refs)
 
 When `iteration_delta.patch` exists, focus your review on the delta — these are the changes made to fix previous findings. Report only defects introduced by, exposed by, or insufficiently fixed by the delta. Cite delta lines as primary evidence. Use the full patch for context only.
 
 ## Output
 
-Write your review result to `.signum/reviews/claude.json` following the JSON format specified in the review template (the part between ###SIGNUM_REVIEW_START### and ###SIGNUM_REVIEW_END### markers).
+Write your review result to `.signum/reviews/claude.json` as a JSON object with this structure:
+```json
+{
+  "verdict": "APPROVE | CONDITIONAL | REJECT",
+  "findings": [
+    {
+      "severity": "CRITICAL | MAJOR | MINOR",
+      "category": "bug | security | logic | quality | performance",
+      "file": "path/to/file",
+      "line": 0,
+      "comment": "description of the issue",
+      "evidence": "code snippet or reasoning",
+      "fingerprint": "lowercase normalized summary for dedup"
+    }
+  ],
+  "summary": "1-2 sentence overall assessment"
+}
+```
 
 Write ONLY the JSON object, no markers, no markdown, no commentary.
 
