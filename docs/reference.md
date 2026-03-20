@@ -345,6 +345,21 @@ Normal behavior. Signum detects existing `contract.json` and offers:
 - **Resume**: continue from Phase 2
 - **Restart**: clear artifacts, start fresh
 
+### Optional: jj-supersede integration (v4.15.0+)
+
+In jj-managed repositories, the contractor can detect ghost solutions — functions that are semantically superseded but still present in the codebase. This requires [jj-supersede](https://github.com/heurema/jj-supersede):
+
+```bash
+uv tool install jj-supersede
+```
+
+When both `jj` and `jj-supersede` are available, the contractor automatically:
+1. Runs `jj-supersede report --json` during CONTRACT phase (step 1.8)
+2. Generates `removals` entries with `type: "function"` for superseded functions
+3. Creates non-blocking `cleanupObligations` with `action: "remove_code"`
+
+If `jj-supersede` is not installed or the project is not a jj repo, this step is silently skipped. No configuration needed.
+
 ### Plugin not loading
 
 1. Verify installation: `claude plugin list | grep signum`
