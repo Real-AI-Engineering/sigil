@@ -346,13 +346,21 @@ If either is empty, do NOT pass `--model` — let the CLI use its built-in defau
 
 Use the `PROJECT_ROOT` determined during Project Resolution. Verify we are in the correct directory:
 
-Check for an existing contract:
+Check for a resumable working set (not just file existence — an archived/finalized run should not trigger resume):
 
 ```bash
-test -f .signum/contract.json && echo "EXISTS" || echo "NONE"
+if [ -f .signum/contract.json ] && [ -f .signum/execution_context.json ]; then
+  echo "RESUMABLE"
+elif [ -f .signum/contract.json ]; then
+  echo "CONTRACT_ONLY"
+else
+  echo "NONE"
+fi
 ```
 
-If contract.json exists, ask the user: "A previous contract exists in .signum/contract.json. Resume from Phase 2, or restart from Phase 1 (discards existing contract)?"
+- If `RESUMABLE`: a previous run is in progress. Ask the user: "A previous run exists in .signum/ (contract + execution context). Resume from Phase 2, or restart from Phase 1 (discards existing contract)?"
+- If `CONTRACT_ONLY`: a contract exists but no execution started. Ask: "A contract exists but execution hasn't started. Resume from Phase 2 (execute this contract), or restart from Phase 1 (new contract)?"
+- If `NONE`: proceed to Phase 1.
 
 Wait for the user's answer before continuing. If restart, delete the existing artifacts:
 
@@ -362,7 +370,7 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch .sig
        .signum/audit_summary.json .signum/proofpack.json \
        .signum/holdout_report.json \
        .signum/contract-engineer.json .signum/contract-policy.json \
-       .signum/policy_violations.json \
+       .signum/policy_violations.json .signum/policy_scan.json \
        .signum/spec_quality.json .signum/spec_validation.json \
        .signum/repo_contract_baseline.json .signum/repo_contract_violations.json \
        .signum/contract-hash.txt .signum/execution_context.json \
@@ -371,8 +379,13 @@ rm -f .signum/contract.json .signum/execute_log.json .signum/combined.patch .sig
        .signum/reviews/codex_raw.txt .signum/reviews/gemini_raw.txt \
        .signum/clover_report.json .signum/approval.json \
        .signum/intent_check.json \
-       .signum/audit_iteration_log.json .signum/flaky_tests.json .signum/repair_brief.json
-rm -rf .signum/iterations/
+       .signum/audit_iteration_log.json .signum/repair_brief.json .signum/flaky_tests.json
+rm -rf .signum/iterations/ .signum/receipts/ .signum/runs/ .signum/snapshots/
+# Clear activeContractId if set
+if [ -f .signum/contracts/index.json ]; then
+  jq '.activeContractId = null' .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+    && mv .signum/contracts/index.json.tmp .signum/contracts/index.json 2>/dev/null || true
+fi
 ```
 
 ---
@@ -3132,6 +3145,142 @@ Then display the appropriate next steps based on the decision:
 - **AUTO_OK**: "Changes are verified. Review `.signum/combined.patch` and commit when ready."
 - **AUTO_BLOCK**: "Issues found. Review `.signum/audit_summary.json` and fix before committing."
 - **HUMAN_REVIEW**: "Audit inconclusive. Review `.signum/audit_summary.json`, then either: (1) refine acceptance criteria and re-run `/signum`, or (2) manually verify the flagged findings."
+
+### Step 4.5: Finalize run (artifact cleanup)
+
+After displaying results, finalize the current run to prevent stale artifacts from confusing subsequent invocations.
+
+**Decision-based behavior:**
+
+- **AUTO_OK** → auto-finalize (archive + purge working set). Zero-friction success path.
+- **HUMAN_REVIEW** → ask the user: "Pipeline complete (HUMAN_REVIEW). Artifacts in .signum/. Options: (1) archive — save to .signum/archive/ and clean working set, (2) keep — leave all artifacts for review, (3) delete — remove working set entirely." Default if no answer: keep.
+- **AUTO_BLOCK** → ask the user: "Pipeline blocked (AUTO_BLOCK). Options: (1) keep — leave artifacts for debugging (default), (2) delete — remove working set." Default if no answer: keep.
+
+**Finalize flow (archive + purge):**
+
+Use the Bash tool:
+
+```bash
+DECISION=$(jq -r '.decision' .signum/audit_summary.json)
+CONTRACT_ID=$(jq -r '.contractId // empty' .signum/contract.json)
+
+finalize_run() {
+  # Step 1: Create temp archive dir
+  ARCHIVE_TMP=$(mktemp -d .signum/archive-tmp.XXXXXX)
+
+  # Step 2: Copy durable artifacts to temp
+  cp .signum/contract.json "$ARCHIVE_TMP/" 2>/dev/null
+  cp .signum/proofpack.json "$ARCHIVE_TMP/" 2>/dev/null
+  cp .signum/approval.json "$ARCHIVE_TMP/" 2>/dev/null
+  cp .signum/audit_summary.json "$ARCHIVE_TMP/" 2>/dev/null
+  cp .signum/receipts/execute.json "$ARCHIVE_TMP/" 2>/dev/null || true
+
+  # Step 3: Verify required files exist in temp
+  if [ ! -f "$ARCHIVE_TMP/contract.json" ] || [ ! -f "$ARCHIVE_TMP/proofpack.json" ]; then
+    echo "ERROR: archive incomplete — keeping working set intact"
+    rm -rf "$ARCHIVE_TMP"
+    return 1
+  fi
+
+  # Step 4: Atomic move to final archive location
+  if [ -n "$CONTRACT_ID" ]; then
+    ARCHIVE_FINAL=".signum/archive/${CONTRACT_ID}"
+    mkdir -p "$ARCHIVE_FINAL"
+    cp "$ARCHIVE_TMP/"* "$ARCHIVE_FINAL/" 2>/dev/null
+  fi
+  rm -rf "$ARCHIVE_TMP"
+
+  # Step 5: Clear activeContractId
+  if [ -f .signum/contracts/index.json ] && [ -n "$CONTRACT_ID" ]; then
+    jq '.activeContractId = null' .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+      && mv .signum/contracts/index.json.tmp .signum/contracts/index.json
+  fi
+
+  # Step 6: Purge root working set (keep contracts/ and index)
+  rm -f .signum/contract.json .signum/contract-engineer.json .signum/contract-policy.json \
+       .signum/execute_log.json .signum/combined.patch .signum/iteration_delta.patch \
+       .signum/baseline.json .signum/mechanic_report.json .signum/holdout_report.json \
+       .signum/audit_summary.json .signum/proofpack.json .signum/approval.json \
+       .signum/policy_violations.json .signum/policy_scan.json \
+       .signum/spec_quality.json .signum/spec_validation.json \
+       .signum/repo_contract_baseline.json .signum/repo_contract_violations.json \
+       .signum/contract-hash.txt .signum/execution_context.json \
+       .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
+       .signum/clover_report.json .signum/intent_check.json \
+       .signum/audit_iteration_log.json .signum/repair_brief.json .signum/flaky_tests.json
+  rm -rf .signum/reviews/ .signum/iterations/ .signum/receipts/ .signum/runs/ .signum/snapshots/
+
+  echo "Run finalized: archived to .signum/archive/$CONTRACT_ID/, working set cleaned"
+}
+
+if [ "$DECISION" = "AUTO_OK" ]; then
+  finalize_run
+fi
+```
+
+If `DECISION` is `AUTO_OK`, finalize runs automatically. For `HUMAN_REVIEW` or `AUTO_BLOCK`, wait for the user's choice (prompted above), then run one of the following bash blocks (each is self-contained — variables must be re-resolved since each Bash tool call gets a fresh shell):
+
+**If user chooses "archive":**
+
+```bash
+CONTRACT_ID=$(jq -r '.contractId // empty' .signum/contract.json)
+ARCHIVE_TMP=$(mktemp -d .signum/archive-tmp.XXXXXX)
+cp .signum/contract.json "$ARCHIVE_TMP/" 2>/dev/null
+cp .signum/proofpack.json "$ARCHIVE_TMP/" 2>/dev/null
+cp .signum/approval.json "$ARCHIVE_TMP/" 2>/dev/null
+cp .signum/audit_summary.json "$ARCHIVE_TMP/" 2>/dev/null
+cp .signum/receipts/execute.json "$ARCHIVE_TMP/" 2>/dev/null || true
+if [ ! -f "$ARCHIVE_TMP/contract.json" ] || [ ! -f "$ARCHIVE_TMP/proofpack.json" ]; then
+  echo "ERROR: archive incomplete — keeping working set intact"
+  rm -rf "$ARCHIVE_TMP"; exit 1
+fi
+if [ -n "$CONTRACT_ID" ]; then
+  mkdir -p ".signum/archive/${CONTRACT_ID}"
+  cp "$ARCHIVE_TMP/"* ".signum/archive/${CONTRACT_ID}/" 2>/dev/null
+fi
+rm -rf "$ARCHIVE_TMP"
+if [ -f .signum/contracts/index.json ] && [ -n "$CONTRACT_ID" ]; then
+  jq '.activeContractId = null' .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+    && mv .signum/contracts/index.json.tmp .signum/contracts/index.json
+fi
+rm -f .signum/contract.json .signum/contract-engineer.json .signum/contract-policy.json \
+     .signum/execute_log.json .signum/combined.patch .signum/iteration_delta.patch \
+     .signum/baseline.json .signum/mechanic_report.json .signum/holdout_report.json \
+     .signum/audit_summary.json .signum/proofpack.json .signum/approval.json \
+     .signum/policy_violations.json .signum/policy_scan.json \
+     .signum/spec_quality.json .signum/spec_validation.json \
+     .signum/repo_contract_baseline.json .signum/repo_contract_violations.json \
+     .signum/contract-hash.txt .signum/execution_context.json \
+     .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
+     .signum/clover_report.json .signum/intent_check.json \
+     .signum/audit_iteration_log.json .signum/repair_brief.json .signum/flaky_tests.json
+rm -rf .signum/reviews/ .signum/iterations/ .signum/receipts/ .signum/runs/ .signum/snapshots/
+echo "Run finalized: archived to .signum/archive/$CONTRACT_ID/, working set cleaned"
+```
+
+**If user chooses "delete":**
+
+```bash
+if [ -f .signum/contracts/index.json ]; then
+  jq '.activeContractId = null' .signum/contracts/index.json > .signum/contracts/index.json.tmp \
+    && mv .signum/contracts/index.json.tmp .signum/contracts/index.json 2>/dev/null || true
+fi
+rm -f .signum/contract.json .signum/contract-engineer.json .signum/contract-policy.json \
+     .signum/execute_log.json .signum/combined.patch .signum/iteration_delta.patch \
+     .signum/baseline.json .signum/mechanic_report.json .signum/holdout_report.json \
+     .signum/audit_summary.json .signum/proofpack.json .signum/approval.json \
+     .signum/policy_violations.json .signum/policy_scan.json \
+     .signum/spec_quality.json .signum/spec_validation.json \
+     .signum/repo_contract_baseline.json .signum/repo_contract_violations.json \
+     .signum/contract-hash.txt .signum/execution_context.json \
+     .signum/review_prompt_codex.txt .signum/review_prompt_gemini.txt \
+     .signum/clover_report.json .signum/intent_check.json \
+     .signum/audit_iteration_log.json .signum/repair_brief.json .signum/flaky_tests.json
+rm -rf .signum/reviews/ .signum/iterations/ .signum/receipts/ .signum/runs/ .signum/snapshots/
+echo "Working set deleted (no archive)"
+```
+
+**If user chooses "keep" or does not respond:** do nothing.
 
 ---
 
