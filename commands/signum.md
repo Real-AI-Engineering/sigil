@@ -2298,8 +2298,18 @@ echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.j
 Before launching repair engineers, capture a fresh workspace snapshot for this attempt. Each attempt needs its own snapshot because `base_tree_hash` must bind to the actual starting state of this repair.
 
 ```bash
+# Re-resolve snapshot-tree.sh (each Bash tool call is a fresh shell)
+_SIGNUM_SNAPSHOT=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/snapshot-tree.sh" ] || continue
+  _SIGNUM_SNAPSHOT="${_d}/lib/snapshot-tree.sh"
+  break
+done
 ATTEMPT_PAD=$(printf '%02d' "$((CURRENT_ITERATION + 1))")
-if [ -n "${_SIGNUM_SNAPSHOT:-}" ] && [ -f "$_SIGNUM_SNAPSHOT" ]; then
+if [ -n "$_SIGNUM_SNAPSHOT" ]; then
   bash "$_SIGNUM_SNAPSHOT" "execute-attempt-${ATTEMPT_PAD}"
   echo "Pre-repair snapshot captured: execute-attempt-${ATTEMPT_PAD}"
 fi
@@ -2457,8 +2467,21 @@ cp "$WINNER_DIR/audit_summary.json" .signum/audit_summary.json 2>/dev/null || tr
 Boundary verification must run while the winner worktree still exists — it needs the live workspace to verify file hashes, scope integrity, and AC evidence. Pruning worktrees before verification would cause the verifier to run against stale main checkout.
 
 ```bash
+# Re-resolve boundary-verifier.sh and transition-verifier.sh (fresh shell)
+_SIGNUM_BOUNDARY=""
+_SIGNUM_TRANSITION=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -z "$_SIGNUM_BOUNDARY" ] && [ -f "${_d}/lib/boundary-verifier.sh" ] && \
+    _SIGNUM_BOUNDARY="${_d}/lib/boundary-verifier.sh"
+  [ -z "$_SIGNUM_TRANSITION" ] && [ -f "${_d}/lib/transition-verifier.sh" ] && \
+    _SIGNUM_TRANSITION="${_d}/lib/transition-verifier.sh"
+done
+
 RECEIPT_CHAIN_OK=true
-if [ -n "${_SIGNUM_BOUNDARY:-}" ]; then
+if [ -n "$_SIGNUM_BOUNDARY" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$((CURRENT_ITERATION + 1))")
   if ! bash "$_SIGNUM_BOUNDARY" execute \
     --workspace-root "$WINNER_DIR" \
@@ -2478,7 +2501,7 @@ if [ -n "${_SIGNUM_BOUNDARY:-}" ]; then
       ".signum/runs/$_CURRENT_RUN_ID/" 2>/dev/null || true
   fi
 fi
-if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "${_SIGNUM_TRANSITION:-}" ]; then
+if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "$_SIGNUM_TRANSITION" ]; then
   ATTEMPT_PAD=$(printf '%02d' "$((CURRENT_ITERATION + 1))")
   if ! bash "$_SIGNUM_TRANSITION" execute audit \
     --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json"; then
