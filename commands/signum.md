@@ -38,7 +38,7 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
     },
     "EXECUTE": {
       "description": "Implement code against contract with repair loop",
-      "steps": ["baseline capture", "engineer agent (max 3 attempts)", "scope gate", "policy compliance"],
+      "steps": ["baseline capture", "pre-execute snapshot", "engineer agent (max 3 attempts)", "scope gate", "policy compliance", "scope existence gate", "boundary verification", "transition verification"],
       "duration": "1-5 min",
       "approvals": 0
     },
@@ -104,9 +104,13 @@ cp "${DIR}approval.json" "$ARCHIVE_DIR" 2>/dev/null || true
 # Copy audit summary if present
 cp "${DIR}audit_summary.json" "$ARCHIVE_DIR" 2>/dev/null || true
 
+# Copy receipt chain artifacts (execute receipt is audit evidence)
+cp "${DIR}receipts/execute.json" "$ARCHIVE_DIR" 2>/dev/null || true
+
 # Purge intermediate artifacts (reviews, baseline, holdout, execute_log, prompts)
 rm -rf "${DIR}reviews/" 2>/dev/null || true
 rm -rf "${DIR}iterations/" 2>/dev/null || true
+rm -rf "${DIR}receipts/" "${DIR}runs/" "${DIR}snapshots/" 2>/dev/null || true
 rm -f "${DIR}baseline.json" "${DIR}execute_log.json" "${DIR}holdout_report.json" \
       "${DIR}mechanic_report.json" "${DIR}combined.patch" "${DIR}iteration_delta.patch" \
       "${DIR}contract-engineer.json" "${DIR}contract-policy.json" \
@@ -1204,6 +1208,11 @@ EXECUTE_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "{\"base_commit\":\"$BASE_COMMIT\",\"started_at\":\"$EXECUTE_START\"}" > .signum/execution_context.json
 echo "Execution context: base_commit=$BASE_COMMIT"
 
+# Set run_id for receipt chain
+RUN_ID=$(jq -r '.contractId // "signum-run"' .signum/contract.json)
+jq --arg rid "$RUN_ID" '. + {run_id:$rid}' .signum/execution_context.json > .signum/execution_context.json.tmp \
+  && mv .signum/execution_context.json.tmp .signum/execution_context.json
+
 # Lint
 if [ -f "pyproject.toml" ] && grep -q "ruff" pyproject.toml 2>/dev/null; then
   BL_LINT_EXIT=$(ruff check . >/dev/null 2>&1; echo $?)
@@ -1273,6 +1282,29 @@ total = len(results)
 passed = sum(1 for v in results.values() if v['passed'])
 print(f'Repo-contract baseline: {passed}/{total} invariants passing')
 "
+fi
+```
+
+### Step 2.0.5: Capture pre-execute snapshot (receipt chain)
+
+Use the Bash tool to capture a deterministic workspace snapshot before the engineer runs. This snapshot anchors the receipt chain — `base_tree_hash` in the execute receipt will reference this snapshot.
+
+```bash
+# Resolve snapshot-tree.sh from known trusted Signum install roots only.
+_SIGNUM_SNAPSHOT=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/snapshot-tree.sh" ] || continue
+  _SIGNUM_SNAPSHOT="${_d}/lib/snapshot-tree.sh"
+  break
+done
+if [ -z "$_SIGNUM_SNAPSHOT" ]; then
+  echo "WARNING: snapshot-tree.sh not found — receipt chain will be incomplete"
+else
+  bash "$_SIGNUM_SNAPSHOT" execute-attempt-01
+  echo "Pre-execute snapshot captured"
 fi
 ```
 
@@ -1400,6 +1432,80 @@ fi
 ```
 
 If output contains `AUTO_BLOCK`, **STOP**. Do not proceed to Phase 3.
+
+### Step 2.4.6: Scope existence gate
+
+Use the Bash tool to verify all non-glob `inScope` paths exist after the engineer ran. This catches the failure class where files were promised but never created:
+
+```bash
+MISSING_SCOPE=""
+while IFS= read -r scoped; do
+  scoped=$(printf '%s' "$scoped" | sed 's/ (.*$//')
+  [ -z "$scoped" ] && continue
+  case "$scoped" in
+    *'*'*|*'?'*|*'['*) continue ;;
+  esac
+  if [ ! -e "$scoped" ]; then
+    MISSING_SCOPE="$MISSING_SCOPE\n  $scoped"
+  fi
+done < <(jq -r '.inScope[]' .signum/contract.json)
+if [ -n "$MISSING_SCOPE" ]; then
+  echo "SCOPE MISSING: expected inScope paths do not exist:$MISSING_SCOPE"
+  exit 1
+else
+  echo "Scope existence: PASS (all inScope paths present)"
+fi
+```
+
+If scope existence fails, **STOP**. Do not proceed to Phase 3.
+
+### Step 2.5: Boundary verification (receipt chain)
+
+Use the Bash tool to run deterministic boundary verification. This runs AFTER the engineer completes and verifies AC evidence, scope integrity, and artifact hashes. The boundary verifier generates the execute receipt — the engineer does NOT write its own receipt.
+
+```bash
+_SIGNUM_BOUNDARY=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/boundary-verifier.sh" ] || continue
+  _SIGNUM_BOUNDARY="${_d}/lib/boundary-verifier.sh"
+  break
+done
+if [ -z "$_SIGNUM_BOUNDARY" ]; then
+  echo "WARNING: boundary-verifier.sh not found — skipping receipt chain verification"
+else
+  bash "$_SIGNUM_BOUNDARY" execute \
+    --snapshot .signum/snapshots/execute-attempt-01.json
+fi
+```
+
+If boundary verifier exits non-zero, **STOP**. Do not proceed to Phase 3.
+
+### Step 2.6: Transition verification (receipt chain)
+
+Use the Bash tool to verify the execute → audit transition gate. This checks receipt integrity, contract hash chain, artifact hashes, and AC evidence completeness.
+
+```bash
+_SIGNUM_TRANSITION=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/transition-verifier.sh" ] || continue
+  _SIGNUM_TRANSITION="${_d}/lib/transition-verifier.sh"
+  break
+done
+if [ -z "$_SIGNUM_TRANSITION" ]; then
+  echo "WARNING: transition-verifier.sh not found — skipping transition gate"
+else
+  bash "$_SIGNUM_TRANSITION" execute audit \
+    --snapshot .signum/snapshots/execute-attempt-01.json
+fi
+```
+
+If transition verifier exits non-zero, **STOP**. Do not proceed to Phase 3.
 
 ---
 
@@ -2187,6 +2293,28 @@ jq -n \
 echo "Repair brief built: $(jq '.reviewFindings | length' .signum/repair_brief.json) findings, $(jq '.mechanicFindings | length' .signum/repair_brief.json) mechanic findings"
 ```
 
+**Capture pre-repair snapshot (receipt chain):**
+
+Before launching repair engineers, capture a fresh workspace snapshot for this attempt. Each attempt needs its own snapshot because `base_tree_hash` must bind to the actual starting state of this repair.
+
+```bash
+# Re-resolve snapshot-tree.sh (each Bash tool call is a fresh shell)
+_SIGNUM_SNAPSHOT=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -f "${_d}/lib/snapshot-tree.sh" ] || continue
+  _SIGNUM_SNAPSHOT="${_d}/lib/snapshot-tree.sh"
+  break
+done
+ATTEMPT_PAD=$(printf '%02d' "$((CURRENT_ITERATION + 1))")
+if [ -n "$_SIGNUM_SNAPSHOT" ]; then
+  bash "$_SIGNUM_SNAPSHOT" "execute-attempt-${ATTEMPT_PAD}"
+  echo "Pre-repair snapshot captured: execute-attempt-${ATTEMPT_PAD}"
+fi
+```
+
 **Clear stale engineer artifacts before launching repair:**
 
 ```bash
@@ -2332,11 +2460,65 @@ cp "$WINNER_DIR/holdout_report.json" .signum/holdout_report.json 2>/dev/null || 
 mkdir -p .signum/reviews
 cp "$WINNER_DIR/reviews/"*.json .signum/reviews/ 2>/dev/null || true
 cp "$WINNER_DIR/audit_summary.json" .signum/audit_summary.json 2>/dev/null || true
+```
 
-# Clean up worktrees now that winner artifacts are copied
+**Run boundary verification on winner BEFORE pruning worktrees (receipt chain):**
+
+Boundary verification must run while the winner worktree still exists — it needs the live workspace to verify file hashes, scope integrity, and AC evidence. Pruning worktrees before verification would cause the verifier to run against stale main checkout.
+
+```bash
+# Re-resolve boundary-verifier.sh and transition-verifier.sh (fresh shell)
+_SIGNUM_BOUNDARY=""
+_SIGNUM_TRANSITION=""
+for _d in \
+  "${_REAL_HOME:=$HOME}/.claude/plugins/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.local/share/emporium/signum/platforms/claude-code" \
+  "${_REAL_HOME}/.nex/plugins/signum/platforms/claude-code"; do
+  [ -z "$_SIGNUM_BOUNDARY" ] && [ -f "${_d}/lib/boundary-verifier.sh" ] && \
+    _SIGNUM_BOUNDARY="${_d}/lib/boundary-verifier.sh"
+  [ -z "$_SIGNUM_TRANSITION" ] && [ -f "${_d}/lib/transition-verifier.sh" ] && \
+    _SIGNUM_TRANSITION="${_d}/lib/transition-verifier.sh"
+done
+
+RECEIPT_CHAIN_OK=true
+if [ -n "$_SIGNUM_BOUNDARY" ]; then
+  ATTEMPT_PAD=$(printf '%02d' "$((CURRENT_ITERATION + 1))")
+  if ! bash "$_SIGNUM_BOUNDARY" execute \
+    --workspace-root "$WINNER_DIR" \
+    --signum-dir "$WINNER_DIR/.signum" \
+    --contract "$WINNER_DIR/.signum/contract-engineer.json" \
+    --contract-full "$WINNER_DIR/.signum/contract.json" \
+    --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json"; then
+    echo "BOUNDARY_BLOCK: repair attempt $((CURRENT_ITERATION + 1)) failed boundary verification"
+    RECEIPT_CHAIN_OK=false
+  fi
+  # Copy receipt from winner worktree to root .signum
+  _CURRENT_RUN_ID=$(jq -r '.run_id // empty' .signum/execution_context.json)
+  mkdir -p ".signum/receipts" ".signum/runs/$_CURRENT_RUN_ID"
+  cp "$WINNER_DIR/.signum/receipts/execute.json" .signum/receipts/execute.json 2>/dev/null || true
+  if [ -d "$WINNER_DIR/.signum/runs/$_CURRENT_RUN_ID" ]; then
+    cp "$WINNER_DIR/.signum/runs/$_CURRENT_RUN_ID/execute-"*.json \
+      ".signum/runs/$_CURRENT_RUN_ID/" 2>/dev/null || true
+  fi
+fi
+if [ "$RECEIPT_CHAIN_OK" = "true" ] && [ -n "$_SIGNUM_TRANSITION" ]; then
+  ATTEMPT_PAD=$(printf '%02d' "$((CURRENT_ITERATION + 1))")
+  if ! bash "$_SIGNUM_TRANSITION" execute audit \
+    --snapshot ".signum/snapshots/execute-attempt-${ATTEMPT_PAD}.json"; then
+    echo "TRANSITION_BLOCK: repair attempt $((CURRENT_ITERATION + 1)) failed transition gate"
+    RECEIPT_CHAIN_OK=false
+  fi
+fi
+```
+
+**Clean up worktrees after boundary verification:**
+
+```bash
 _prune_lanes
 _LANE_CLEANUP_DONE=true
 ```
+
+If `RECEIPT_CHAIN_OK` is `false`, **STOP** the repair iteration. Do not proceed to audit — boundary enforcement is a hard gate, not an advisory.
 
 **After engineer completes, validate execute success before re-running audit:**
 
@@ -2391,7 +2573,7 @@ fi
 
 **Re-run the full audit subpipeline:**
 
-Re-run Steps 2.4 (scope gate), 2.5 (policy compliance if applicable), 3.0.5 (repo-contract invariants), 3.1 (mechanic), 3.1.3 (policy scanner), 3.1.5 (holdout validation), 3.2-3.3.5 (reviews — risk-proportional), and 3.5 (synthesizer).
+Re-run Steps 2.4 (scope gate), 2.4.5 (policy compliance if applicable), 2.4.6 (scope existence gate), 2.5 (boundary verification), 2.6 (transition verification), 3.0.5 (repo-contract invariants), 3.1 (mechanic), 3.1.3 (policy scanner), 3.1.5 (holdout validation), 3.2-3.3.5 (reviews — risk-proportional), and 3.5 (synthesizer).
 
 Pass `currentIteration` to the synthesizer prompt:
 
