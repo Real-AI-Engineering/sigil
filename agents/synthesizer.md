@@ -24,6 +24,7 @@ Read these files:
 - `.signum/holdout_report.json` -- holdout scenario results (if exists)
 - `.signum/execute_log.json` -- execution attempt history
 - `.signum/audit_iteration_log.json` -- previous iteration results (if exists, for iterative AUDIT)
+- `.signum/receipts/execute.json` -- execute boundary receipt (required for AC evidence gating)
 
 ## Synthesis Rules (DETERMINISTIC -- follow exactly)
 
@@ -36,6 +37,13 @@ Read these files:
    - Policy scan (`policy_scan.json`) has `summaryCounts.critical` > 0 (CRITICAL policy finding present)
    - Any blocking `cleanupObligation` verify failed (v3.8)
    - Any `removal` with `preventReintroduction: true` has its path still existing (v3.8)
+   - Execute receipt (`.signum/receipts/execute.json`) is missing
+   - Execute receipt `status` is not `PASS`
+   - Any visible AC from `.signum/contract-engineer.json` has no matching entry in execute receipt `.ac_evidence`
+   - Any visible AC has `verify_exit_code != 0` in the receipt
+   - Any visible AC has `verify_format != "dsl"` in the receipt (legacy string verify — not trustworthy)
+   - Any visible AC is marked `vacuous: true` in the receipt on medium/high risk contracts
+   - Execute receipt reports out-of-scope changes or missing inScope paths
 
 2. **AUTO_OK** if ALL of:
    - Mechanic report has no regressions (`hasRegressions: false`)
@@ -173,6 +181,17 @@ Write `.signum/audit_summary.json`:
   }
 }
 ```
+
+## Execute Receipt Coverage Gate
+
+For every visible acceptance criterion in `.signum/contract-engineer.json`, verify that `.signum/receipts/execute.json` `.ac_evidence` contains an entry with the same AC id.
+
+- If any visible AC is missing evidence → AUTO_BLOCK
+- If any AC evidence has `verify_exit_code != 0` → AUTO_BLOCK
+- If the receipt itself is absent or has `status != "PASS"` → AUTO_BLOCK
+- If any AC evidence is `vacuous: true` on medium/high risk → AUTO_BLOCK
+
+This gate **overrides** reviewer approval. Strong reviews without AC evidence are insufficient — the pipeline requires independent deterministic proof that each AC was satisfied.
 
 ## Finding Deduplication
 
