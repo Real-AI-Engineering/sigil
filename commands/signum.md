@@ -516,7 +516,7 @@ NEG_ACS=$(jq '[.acceptanceCriteria[] | select(.description | test("must not|shou
 GOAL_LEN=${#GOAL}
 CLARITY=0
 [ "$GOAL_LEN" -ge 20 ] && [ "$GOAL_LEN" -le 300 ] && CLARITY=$((CLARITY + 10))
-VAGUE=$(echo "$GOAL" | grep -ci "works correctly\|as expected\|properly\|should work" 2>/dev/null || echo 0)
+VAGUE=$(printf '%s' "$GOAL" | grep -ci "works correctly\|as expected\|properly\|should work" 2>/dev/null | tail -1 || echo 0)
 [ "$VAGUE" -eq 0 ] && CLARITY=$((CLARITY + 10))
 
 # Boundary system (0-10): outOfScope + assumptions present
@@ -531,7 +531,7 @@ BOUNDARY=0
 #   error/exception, config/configuration/settings, user/client, file/document)
 ALL_AC_TEXT=$(jq -r '[.acceptanceCriteria[].description] | join(" ")' .signum/contract.json)
 VAGUE_VERBS_PATTERN="handle|process|manage|support|ensure|implement|perform|utilize|leverage|facilitate"
-VAGUE_VERBS_FOUND=$(echo "$ALL_AC_TEXT $GOAL" | grep -ciE "\b($VAGUE_VERBS_PATTERN)\b" 2>/dev/null || echo 0)
+VAGUE_VERBS_FOUND=$(printf '%s' "$ALL_AC_TEXT $GOAL" | grep -ciE "\b($VAGUE_VERBS_PATTERN)\b" 2>/dev/null | tail -1 || echo 0)
 if [ "$VAGUE_VERBS_FOUND" -eq 0 ]; then VAGUE_VERB_PTS=5; else VAGUE_VERB_PTS=0; fi
 
 # Sub-check 2: Terminology consistency (0-5)
@@ -542,8 +542,8 @@ _check_synonyms() {
   local text="$1"
   local a="$2" b="$3"
   local has_a has_b
-  has_a=$(echo "$text" | grep -ciw "$a" 2>/dev/null || echo 0)
-  has_b=$(echo "$text" | grep -ciw "$b" 2>/dev/null || echo 0)
+  has_a=$(printf '%s' "$text" | grep -ciw "$a" 2>/dev/null | tail -1 || echo 0)
+  has_b=$(printf '%s' "$text" | grep -ciw "$b" 2>/dev/null | tail -1 || echo 0)
   if [ "$has_a" -gt 0 ] && [ "$has_b" -gt 0 ]; then echo 1; else echo 0; fi
 }
 _s() { _check_synonyms "$GOAL $ALL_AC_TEXT" "$1" "$2"; }
@@ -567,7 +567,7 @@ while IFS= read -r ac_line; do
   while IFS= read -r phrase; do
     [ -z "$phrase" ] && continue
     word=$(echo "$phrase" | awk '{print $2}')
-    neg_count=$(echo "$AC_TEXTS" | grep -ci "must not $word\|prevent $word\|disallow $word\|disable $word" 2>/dev/null || echo 0)
+    neg_count=$(printf '%s' "$AC_TEXTS" | grep -ci "must not $word\|prevent $word\|disallow $word\|disable $word" 2>/dev/null | tail -1 || echo 0)
     if [ "$neg_count" -gt 0 ]; then CONTRADICTION_FOUND=1; break; fi
   done <<< "$pos"
   [ "$CONTRADICTION_FOUND" -eq 1 ] && break
