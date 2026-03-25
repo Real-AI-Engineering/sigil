@@ -1,21 +1,23 @@
-# Signum
+```
+         _
+   _____(_)___ _____  __  ______ ___
+  / ___/ / __ `/ __ \/ / / / __ `__ \
+ (__  ) / /_/ / / / / /_/ / / / / / /
+/____/_/\__, /_/ /_/\__,_/_/ /_/ /_/
+       /____/
+```
 
-<div align="center">
+**Write contracts before writing code.**
 
-**Write contracts before writing code**
+[![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-4.16.1-5b21b6?style=flat-square)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.16.1-5b21b6?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
+> Your AI agent writes code. Signum makes sure it writes the *right* code.
 
 [Landing page](https://skill7.dev/signum?ref=readme) · [Book a setup call](https://skill7.dev/signum?ref=readme#setup-call) · [Discussions](https://github.com/heurema/signum/discussions)
 
-```bash
-claude plugin marketplace add heurema/emporium
-claude plugin install signum@emporium
-```
-
-</div>
+---
 
 ## What it does
 
