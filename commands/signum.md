@@ -2024,6 +2024,14 @@ if [ "$GEMINI_EXIT" != "0" ]; then
     > .signum/reviews/gemini.json
   echo "gemini: invocation failed (exit $GEMINI_EXIT), marked UNAVAILABLE"
 
+# Level 0.5: strip markdown code fences (```json ... ```) if present
+elif sed -n '1{/^```/d}; ${/^```/d}; p' .signum/reviews/gemini_raw.txt | sed 's/^```json$//' | sed 's/^```$//' > .signum/reviews/gemini_stripped.txt \
+  && jq -e '.verdict' .signum/reviews/gemini_stripped.txt > /dev/null 2>&1; then
+  cp .signum/reviews/gemini_stripped.txt .signum/reviews/gemini.json
+  rm -f .signum/reviews/gemini_stripped.txt
+  echo "gemini: parsed after stripping markdown fences"
+
+# Level 1: valid JSON directly
 elif jq -e '.verdict' .signum/reviews/gemini_raw.txt > /dev/null 2>&1; then
   cp .signum/reviews/gemini_raw.txt .signum/reviews/gemini.json
   echo "gemini: parsed as direct JSON"
