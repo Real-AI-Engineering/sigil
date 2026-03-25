@@ -5,7 +5,7 @@
 **Write contracts before writing code**
 
 ![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-5b21b6?style=flat-square)
-![Version](https://img.shields.io/badge/Version-4.12.0-5b21b6?style=flat-square)
+![Version](https://img.shields.io/badge/Version-4.16.1-5b21b6?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-5b21b6?style=flat-square)
 
 [Landing page](https://skill7.dev/signum?ref=readme) · [Book a setup call](https://skill7.dev/signum?ref=readme#setup-call) · [Discussions](https://github.com/heurema/signum/discussions)
@@ -192,6 +192,26 @@ Without this file, signum uses each CLI's default model. See `forge doctor` to v
 ## Privacy
 
 All orchestration runs inside Claude Code. External providers (Codex CLI, Gemini CLI) receive the diff only — never the full codebase. Signum degrades gracefully if either is unavailable. No API keys required beyond standard CLI auth. No telemetry. Artifacts stored in `.signum/` (auto-added to `.gitignore`).
+
+## Why Signum
+
+| | Signum | CodeRabbit | Codacy |
+|---|---|---|---|
+| **Approach** | Contract-first: define correctness before code | Post-hoc review | Static analysis |
+| **Models** | 3 independent (Claude + Codex + Gemini) | Single model | Rule-based |
+| **Proof artifact** | `proofpack.json` — tamper-evident, CI-gatable | Comment on PR | Report |
+| **Blind testing** | Holdout scenarios engineer never sees | None | None |
+| **Iterative fix** | Auto-repair loop (up to 20 iterations) | Manual fix cycle | Manual |
+| **SOC2 evidence** | Proofpack = CC8.1 attestation | None | Partial |
+
+## Support the project
+
+If Signum saves you time, consider sponsoring its development:
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-♥-ea4aaa?style=flat-square)](https://github.com/sponsors/heurema)
+
+- **$5/mo** — Individual: early access to new check types
+- **$20/mo** — Team: priority support + roadmap input
 
 ## See also
 
