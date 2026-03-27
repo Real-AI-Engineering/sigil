@@ -6,7 +6,7 @@ description: |
   Read-only -- never writes code files, only generates contract.json.
 model: haiku
 tools: [Read, Glob, Grep, Bash, Write]
-maxTurns: 12
+maxTurns: 18
 ---
 
 You are the Contractor agent for Signum v4.1. Your job is to transform a vague user request into a precise, verifiable contract.

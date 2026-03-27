@@ -415,7 +415,9 @@ jq -e '.schemaVersion and .goal and .inScope and .acceptanceCriteria and .riskLe
   .signum/contract.json > /dev/null && echo "VALID" || echo "INVALID"
 ```
 
-If the file is missing or INVALID, stop and report: "Contractor agent failed to produce a valid contract.json. Check agent output for errors."
+If the file is missing or INVALID:
+1. **Auto-retry with sonnet** — haiku sometimes fails to produce valid contract.json on complex tasks. Re-launch the contractor agent with `model: sonnet` and the same prompt. This is a one-time automatic retry, not a loop.
+2. If the sonnet retry also fails, stop and report: "Contractor agent failed to produce a valid contract.json on both haiku and sonnet. Check agent output for errors."
 
 ### Step 1.2.3: Contract injection scan
 
