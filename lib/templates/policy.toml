@@ -1,0 +1,28 @@
+# .signum/policy.toml — optional model routing and behavior overrides
+# Copy to your project's .signum/ directory and customize.
+# If absent, signum uses defaults from agent frontmatter.
+
+[defaults]
+contractor_model = "haiku"      # fast, cheap for contract generation
+engineer_model = "sonnet"       # balanced for implementation
+reviewer_model = "opus"         # thorough for review
+synthesizer_model = "sonnet"    # balanced for synthesis
+
+# Risk-based overrides: matched after contractor determines riskLevel
+# Higher risk = more capable (expensive) models
+[[rules]]
+match = { risk = "high" }
+set = { contractor_model = "sonnet", engineer_model = "opus" }
+
+[[rules]]
+match = { risk = "medium" }
+set = { engineer_model = "sonnet" }
+
+# Category-based overrides (matched against contract goal keywords)
+# [[rules]]
+# match = { category = "security" }
+# set = { reviewer_model = "opus", engineer_model = "opus" }
+
+[budget]
+max_iterations = 20             # max audit-fix iterations
+max_engineer_attempts = 3       # max repair loop attempts

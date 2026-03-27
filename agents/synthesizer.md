@@ -47,8 +47,9 @@ Read these files:
 
 2. **AUTO_OK** if ALL of:
    - Mechanic report has no regressions (`hasRegressions: false`)
-   - All available reviewers verdict is "APPROVE"
+   - All available reviewers verdict is "APPROVE" or "APPROVE_WITH_CONCERNS"
    - No MAJOR or CRITICAL findings from any reviewer
+   - If any reviewer has APPROVE_WITH_CONCERNS: all concerns have severity <= MINOR
    - Review count gate (risk-proportional):
      - `low` risk: at least 1 reviewer successfully parsed (parseOk: true)
      - `medium` risk: at least 2 reviewers parsed, OR at least 1 parsed if all unavailable reviewers have `available: false` (CLI not installed, not a runtime/auth failure)
@@ -56,7 +57,7 @@ Read these files:
    - Holdout report has no failures AND no errors (if holdout_report.json exists, `failed` must be 0 AND `errors` must be 0)
 
 3. **HUMAN_REVIEW** if:
-   - None of the above apply (disagreements, CONDITIONAL verdicts, MAJOR findings, parse failures, holdout failures or errors)
+   - None of the above apply (disagreements, CONDITIONAL verdicts, MAJOR findings, APPROVE_WITH_CONCERNS with MAJOR concerns, parse failures, holdout failures or errors)
 
 Pre-existing failures (checks that failed in baseline AND still fail) no longer auto-block.
 
@@ -74,6 +75,7 @@ list each failed/errored holdout ID, description, and error message from the `re
 
 - If a review file doesn't exist or is not valid JSON: mark as `unavailable`
 - If parseOk is false (raw text instead of JSON): mark as `parse_error`
+- If `failure_reason` is present: record it in audit_summary for diagnostics. Values: `timeout`, `rate_limit`, `auth_expired`, `provider_overloaded`, `adapter_crash`, `unknown`. `error_type` is `transient` (retry-worthy) or `permanent` (skip).
 - With 0 available reviews: decision is `HUMAN_REVIEW` (cannot auto-approve without evidence)
 - With 1 available review:
   - If contract `riskLevel` is `low`: full decision logic applies (single Claude review is sufficient)
@@ -95,6 +97,7 @@ After determining the decision, compute confidence metrics:
   - If total holdouts == 0: 75 (neutral — no evidence, no penalty)
 - `review_alignment`:
   - 3/3 APPROVE = 100
+  - mix of APPROVE and APPROVE_WITH_CONCERNS (0 CONDITIONAL/REJECT) = 90
   - 2/3 APPROVE + 1 CONDITIONAL = 70
   - 2/3 APPROVE + 1 REJECT = 40
   - 1/3 APPROVE = 20
@@ -157,9 +160,9 @@ Write `.signum/audit_summary.json`:
 {
   "mechanic": "pass",
   "reviews": {
-    "claude": { "verdict": "...", "findings": [], "parseOk": true, "available": true },
-    "codex": { "verdict": "...", "findings": [], "parseOk": true, "available": true },
-    "gemini": { "verdict": "...", "findings": [], "parseOk": false, "available": true }
+    "claude": { "verdict": "...", "findings": [], "concerns": [], "parseOk": true, "available": true },
+    "codex": { "verdict": "...", "findings": [], "concerns": [], "parseOk": true, "available": true, "failure_reason": null, "error_type": null },
+    "gemini": { "verdict": "...", "findings": [], "concerns": [], "parseOk": false, "available": true, "failure_reason": null, "error_type": null }
   },
   "availableReviews": 2,
   "holdout": { "total": 2, "passed": 2, "failed": 0, "errors": 0 },

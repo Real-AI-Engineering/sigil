@@ -105,6 +105,27 @@ attempt 3: final attempt
 
 If a verify command has `type: "manual"`, skip it during the repair loop. Log it as `"manual: requires human verification"` in execute_log.json.
 
+### Step 4.1: Verification-before-completion gate
+
+Before marking ANY attempt as PASSED or declaring SUCCESS, apply this mandatory 5-step gate:
+
+1. **IDENTIFY** - for each acceptance criterion, what exact command proves it passes?
+2. **RUN** - execute the FULL command fresh. Do NOT reuse previous run results.
+3. **READ** - examine the FULL output and exit code. Count actual passes/failures.
+4. **VERIFY** - does the output actually confirm the claim? If NO: state actual status with evidence. If YES: state claim WITH evidence quoted.
+5. **ONLY THEN** - log the result in execute_log.json with `evidence` field.
+
+**Skip any step = lying, not verifying.** No exceptions.
+
+**Red flags - STOP and re-verify if you catch yourself:**
+- Using "should", "probably", "seems to", "looks like" about results
+- About to mark attempt PASSED without running the command in THIS attempt
+- Expressing satisfaction ("Done!", "Great!") before step 4
+- Trusting partial verification (e.g., "linter passed" without running tests)
+- Relying on previous attempt results instead of running fresh
+
+**3-fix escalation rule:** if the same type of failure recurs across 3 attempts, STOP. This is not a bug - it is wrong architecture. Report it in execute_log.json and mark FAILED.
+
 ### Step 5: Save artifacts
 
 On success:
@@ -119,19 +140,48 @@ On failure:
 
 ```json
 {
+  "schema_version": 2,
   "status": "SUCCESS",
+  "error_type": null,
+  "termination_reason": null,
+  "started_at": "2026-03-27T14:00:01Z",
+  "finished_at": "2026-03-27T14:00:31Z",
+  "duration_ms": 30000,
   "attempts": [
     {
       "number": 1,
+      "status": "PARTIAL",
+      "started_at": "2026-03-27T14:00:01Z",
       "checks": {
-        "AC1": { "command": "...", "exitCode": 0, "passed": true },
-        "AC2": { "command": "...", "exitCode": 1, "passed": false, "error": "..." }
+        "AC1": { "command": "npm test", "exitCode": 0, "passed": true, "output": "34 passed, 0 failed", "evidence": "34 passed" },
+        "AC2": { "command": "npx eslint src/", "exitCode": 1, "passed": false, "output": "3 errors found", "error": "Linter found 3 errors" }
+      }
+    },
+    {
+      "number": 2,
+      "status": "SUCCESS",
+      "started_at": "2026-03-27T14:00:18Z",
+      "checks": {
+        "AC1": { "command": "npm test", "exitCode": 0, "passed": true, "output": "34 passed, 0 failed", "evidence": "34 passed" },
+        "AC2": { "command": "npx eslint src/", "exitCode": 0, "passed": true, "output": "0 errors", "evidence": "0 errors" }
       }
     }
   ],
-  "totalAttempts": 1,
+  "totalAttempts": 2,
   "maxAttempts": 3
 }
+```
+
+**Key fields:**
+- `schema_version`: always 2 (v1 had no output/evidence/timing fields)
+- `status`: `SUCCESS` | `FAILED` | `TIMEOUT`
+- `error_type`: null on success, `"transient"` (flaky test, timeout) or `"permanent"` (wrong architecture, impossible AC) on failure
+- `termination_reason`: null on success, e.g. `"max_attempts_exceeded"`, `"architecture_issue"`, `"ac_impossible"` on failure
+- `started_at` / `finished_at` / `duration_ms`: overall execution timing (ISO 8601)
+- Per-attempt `started_at`: when each attempt started
+- Per-attempt `status`: `SUCCESS` | `PARTIAL` | `FAILED`
+- `output`: actual command stdout (first ~500 chars)
+- `evidence`: direct quote from output proving the claim (required for `passed: true`)
 ```
 
 ## Repair Mode
@@ -164,6 +214,7 @@ Read these files:
 
 - You are the ONLY agent that writes code -- take this seriously
 - NEVER modify files outside inScope
-- ALWAYS run verify commands, don't assume your code is correct
+- ALWAYS run verify commands fresh per attempt. Every `passed: true` MUST have an `evidence` field quoting the command output. "Seems right" = automatic rejection.
 - Keep diffs minimal -- don't refactor, don't add comments, don't "improve" unrelated code
 - If you can't fix after 3 attempts, stop cleanly with a good error message
+- If the same failure type recurs 3 times, report it as an architecture issue, not a bug
