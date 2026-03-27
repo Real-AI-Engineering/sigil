@@ -1,5 +1,31 @@
 # Changelog
 
+## [4.17.0] - 2026-03-27
+
+### Added
+- **Verification-before-completion gate** (engineer) — 5-step gate: IDENTIFY/RUN/READ/VERIFY/LOG with mandatory evidence capture and red flags list
+- **4-status reviewer protocol** — APPROVE_WITH_CONCERNS verdict + concerns[] field for documented-but-acceptable issues; synthesizer AUTO_OK accepts concerns with severity <= MINOR
+- **Execute log schema v2** — timing (started_at/finished_at/duration_ms), error_type (transient/permanent), termination_reason, per-attempt status and timing, output + evidence fields
+- **INTERRUPTED status** — engineer writes execute_log.json after every attempt; new status for mid-loop crashes
+- **Contract injection scan** — lib/contract-injection-scan.sh defends against MINJA-class Unicode injection (zero-width, bidi overrides, tag characters) between contractor and engineer
+- **Session context** — lib/session-manager.sh provides cross-run memory with typed entries (success/failure/scope_violation/model_disagreement) and TTL-based eviction; contractor reads session for improved contracts
+- **Policy-driven model routing** — lib/policy-resolver.sh reads .signum/policy.toml for risk-based model overrides (e.g., high-risk -> opus engineer)
+- **Failure taxonomy** — codex/gemini review failures classified as transient (timeout, rate_limit, provider_overloaded) vs permanent (auth_expired, adapter_crash) with failure_reason field
+- **Proofpack chain** — lib/proofpack-index.sh appends hash-linked entries to .signum/proofpack-index.jsonl (tamper-evident audit trail)
+- **Metric ratchet** — lib/metric-ratchet.sh computes weekly performance comparison (auto_ok_rate, confidence, etc.) from proofpack archive
+- **Proofpack v4.8 schema** — timing, releaseVerdict, riskLevel, reviewCoverage fields for punk-run receipt compatibility
+
+### Fixed
+- **Contractor haiku fails on medium-risk** (#9) — orchestrator auto-retries with sonnet when haiku fails; maxTurns increased 12 -> 18
+- **Engineer execute_log.json missing on partial completion** — CRITICAL note to write after every attempt + INTERRUPTED status
+- **Scope gate broken with annotated paths** — strip parenthetical annotations from inScope, use while-read loop instead of for-in
+- **Contract injection scan crashes on string assumptions** — handle both object ({text: ...}) and plain string formats
+
+### Documentation
+- docs/shared-receipt-mapping.md — field mapping between signum proofpack and specpunk receipt v1
+- docs/thin-cli-extraction-plan.md — prioritized plan for extracting 15 bash scripts (~3200 LOC) to Rust signum-core crate
+- lib/templates/policy.toml — example policy configuration
+
 ## [4.16.1] - 2026-03-23
 
 ## [4.16.0] - 2026-03-22

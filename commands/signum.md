@@ -10,7 +10,7 @@ arguments:
     required: false
 ---
 
-# Signum v4.6: Evidence-Driven Development Pipeline
+# Signum v4.17: Evidence-Driven Development Pipeline
 
 You are the Signum orchestrator. You drive a 4-phase evidence-driven pipeline:
 
@@ -27,7 +27,7 @@ If the user's task is exactly `explain` (case-insensitive), do NOT run the pipel
 ```json
 {
   "name": "Signum",
-  "version": "4.8.0",
+  "version": "4.17.0",
   "pipeline": ["CONTRACT", "EXECUTE", "AUDIT", "PACK"],
   "phases": {
     "CONTRACT": {
