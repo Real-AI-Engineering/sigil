@@ -89,23 +89,50 @@ On failure (any attempt fails after max retries):
 
 CRITICAL: Always write `.signum/execute_log.json` as your FIRST action after each attempt completes (before generating patch). This ensures the orchestrator can detect progress even if the agent is interrupted mid-step. Write it with current status after EVERY attempt, not only at the end.
 
+If you cannot complete ANY attempt (crash, timeout, unexpected error), write execute_log.json with `status: "INTERRUPTED"` and `termination_reason` explaining what happened. An interrupted log is always better than no log.
+
 ## Output Format for execute_log.json
 
 ```json
 {
+  "schema_version": 2,
   "status": "SUCCESS",
+  "error_type": null,
+  "termination_reason": null,
+  "started_at": "2026-03-27T14:00:01Z",
+  "finished_at": "2026-03-27T14:00:31Z",
+  "duration_ms": 30000,
   "attempts": [
     {
       "number": 1,
+      "status": "PARTIAL",
+      "started_at": "2026-03-27T14:00:01Z",
       "checks": {
-        "AC1": { "command": "...", "exitCode": 0, "passed": true },
-        "AC2": { "command": "...", "exitCode": 1, "passed": false, "error": "..." }
+        "AC1": { "command": "npm test", "exitCode": 0, "passed": true, "output": "34 passed, 0 failed", "evidence": "34 passed" },
+        "AC2": { "command": "npx eslint src/", "exitCode": 1, "passed": false, "output": "3 errors found", "error": "Linter found 3 errors" }
+      }
+    },
+    {
+      "number": 2,
+      "status": "SUCCESS",
+      "started_at": "2026-03-27T14:00:18Z",
+      "checks": {
+        "AC1": { "command": "npm test", "exitCode": 0, "passed": true, "output": "34 passed, 0 failed", "evidence": "34 passed" },
+        "AC2": { "command": "npx eslint src/", "exitCode": 0, "passed": true, "output": "0 errors", "evidence": "0 errors" }
       }
     }
   ],
-  "totalAttempts": 1,
+  "totalAttempts": 2,
   "maxAttempts": 3
 }
+```
+
+**Key fields:**
+- `status`: `SUCCESS` | `FAILED` | `TIMEOUT` | `INTERRUPTED`
+- `error_type`: null on success, `"transient"` or `"permanent"` on failure
+- `termination_reason`: null on success, e.g. `"max_attempts_exceeded"`, `"agent_crash"` on failure
+- `output`: actual command stdout (first ~500 chars)
+- `evidence`: direct quote from output proving the claim (required for `passed: true`)
 ```
 
 ## Repair Mode

@@ -40,7 +40,7 @@ jq -r '
     (.inScope // [])[] // empty,
     (.outOfScope // [])[] // empty,
     (.acceptanceCriteria // [])[].description // empty,
-    (.assumptions // [])[].text // empty,
+    ((.assumptions // [])[] | if type == "object" then .text else . end) // empty,
     (.openQuestions // [])[] // empty,
     (.removals // [])[].reason // empty,
     (.cleanupObligations // [])[].description // empty,

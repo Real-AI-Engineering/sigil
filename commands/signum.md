@@ -1390,21 +1390,24 @@ Use the Bash tool to verify no out-of-scope files were modified:
 ```bash
 # Get changed files from patch
 CHANGED=$(git diff --name-only)
-IN_SCOPE=$(jq -r '.inScope[]' .signum/contract.json)
-ALLOW_NEW=$(jq -r '.allowNewFilesUnder // [] | .[]' .signum/contract.json)
+# Strip parenthetical annotations from inScope paths (e.g., "src/main.rs (entry point)" -> "src/main.rs")
+IN_SCOPE=$(jq -r '.inScope[]' .signum/contract.json | sed 's/ (.*$//')
+ALLOW_NEW=$(jq -r '.allowNewFilesUnder // [] | .[]' .signum/contract.json | sed 's/ (.*$//')
 # v3.8: removal targets are also allowed scope
 REMOVAL_PATHS=$(jq -r '(.removals // [])[] | .path' .signum/contract.json 2>/dev/null || true)
 
 VIOLATIONS=""
-for file in $CHANGED; do
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
   match=0
-  for pattern in $IN_SCOPE $ALLOW_NEW $REMOVAL_PATHS; do
+  while IFS= read -r pattern; do
+    [ -z "$pattern" ] && continue
     case "$file" in
       ${pattern}*) match=1; break ;;
     esac
-  done
+  done <<< "$(echo "$IN_SCOPE"; echo "$ALLOW_NEW"; echo "$REMOVAL_PATHS")"
   [ $match -eq 0 ] && VIOLATIONS="$VIOLATIONS\n  $file"
-done
+done <<< "$CHANGED"
 
 if [ -n "$VIOLATIONS" ]; then
   echo "SCOPE VIOLATION: files outside inScope modified:$VIOLATIONS"

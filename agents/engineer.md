@@ -89,19 +89,26 @@ Write the code to satisfy ALL acceptance criteria. Follow these rules:
 
 ### Step 4: Repair loop
 
+**CRITICAL: Write execute_log.json after EVERY attempt, not just at the end.** If you crash between attempts, the pipeline needs a partial log to report failure cleanly instead of a confusing "file not found" error.
+
 After implementation, run ALL verify commands from acceptance criteria:
 
 ```
 attempt 1: run verify commands
-  if ALL pass: SUCCESS -> save diff and log
+  -> WRITE execute_log.json immediately (status: SUCCESS or attempts so far)
+  if ALL pass: SUCCESS -> save diff
   if ANY fail: read error output, make targeted fix
 attempt 2: run verify commands again
+  -> UPDATE execute_log.json with attempt 2 results
   if ALL pass: SUCCESS
   if ANY fail: read error, try different approach
 attempt 3: final attempt
+  -> UPDATE execute_log.json with attempt 3 results
   if ALL pass: SUCCESS
   if ANY fail: STOP -> mark FAILED in log
 ```
+
+If you cannot complete ANY attempt (crash, timeout, unexpected error), write execute_log.json with `status: "INTERRUPTED"` and `termination_reason` explaining what happened. An interrupted log is always better than no log.
 
 If a verify command has `type: "manual"`, skip it during the repair loop. Log it as `"manual: requires human verification"` in execute_log.json.
 
@@ -174,9 +181,9 @@ On failure:
 
 **Key fields:**
 - `schema_version`: always 2 (v1 had no output/evidence/timing fields)
-- `status`: `SUCCESS` | `FAILED` | `TIMEOUT`
+- `status`: `SUCCESS` | `FAILED` | `TIMEOUT` | `INTERRUPTED`
 - `error_type`: null on success, `"transient"` (flaky test, timeout) or `"permanent"` (wrong architecture, impossible AC) on failure
-- `termination_reason`: null on success, e.g. `"max_attempts_exceeded"`, `"architecture_issue"`, `"ac_impossible"` on failure
+- `termination_reason`: null on success, e.g. `"max_attempts_exceeded"`, `"architecture_issue"`, `"ac_impossible"`, `"agent_crash"` on failure/interruption
 - `started_at` / `finished_at` / `duration_ms`: overall execution timing (ISO 8601)
 - Per-attempt `started_at`: when each attempt started
 - Per-attempt `status`: `SUCCESS` | `PARTIAL` | `FAILED`
